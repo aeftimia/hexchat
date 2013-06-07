@@ -92,6 +92,10 @@ class sockbot(sleekxmpp.ClientXMPP):
                     del(sock)
                     self.sendMessageWrapper(msg0['from'].bare, msub, mnick, "disconnect me!".encode("UTF-8"), "chat")
                 return()
+            else:
+                print('packet dropped')
+                if mbody not in ("disconnect me!".encode("UTF-8"), "_".encode("UTF-8")):
+                    self.sendMessageWrapper(msg['from'].bare, msub, mnick, "disconnect me!".encode("UTF-8"), 'chat')
         except:
             print("packet dropped")
 
