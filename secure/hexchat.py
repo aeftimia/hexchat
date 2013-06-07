@@ -48,7 +48,7 @@ class sockbot(sleekxmpp.ClientXMPP):
         self.register_plugin('xep_0030') # Service Discovery
         self.register_plugin('xep_0045') # Multi-User Chat
         self.register_plugin('xep_0199') # XMPP Ping
-        self.scheduler.add("asyncore loop", 0.01, asyncore.loop, (0.01, True, self.map, 1), repeat=True)
+        self.scheduler.add("asyncore loop", 0.0005, asyncore.loop, (0.0005, True, self.map, 1), repeat=True)
 
         if self.connect(self.connect_address):
             self.process()
