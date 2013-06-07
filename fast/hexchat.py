@@ -25,7 +25,7 @@ class sockbot(sleekxmpp.ClientXMPP):
         self.register_plugin('xep_0030') # Service Discovery
         self.register_plugin('xep_0045') # Multi-User Chat
         self.register_plugin('xep_0199') # XMPP Ping
-        self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.001, True, self.map, 1), repeat=True)
+        self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
 
         if self.connect(self.connect_address):
             self.process()
@@ -53,8 +53,8 @@ class sockbot(sleekxmpp.ClientXMPP):
             self.add_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
         else:
             print('packet dropped')
-            if msg['body'] not in ("disconnect me!", "_"):
-                self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
+            #if msg['body'] not in ("disconnect me!", "_"):
+            #    self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
 
     def handle_read(self, local_address, peer, remote_address):
         key = local_address+"==>"+peer+"==>"+remote_address

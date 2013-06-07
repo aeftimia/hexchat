@@ -48,7 +48,7 @@ class sockbot(sleekxmpp.ClientXMPP):
         self.register_plugin('xep_0030') # Service Discovery
         self.register_plugin('xep_0045') # Multi-User Chat
         self.register_plugin('xep_0199') # XMPP Ping
-        self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.001, True, self.map, 1), repeat=True)
+        self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
 
         if self.connect(self.connect_address):
             self.process()
@@ -90,12 +90,16 @@ class sockbot(sleekxmpp.ClientXMPP):
                     self.add_socket(msub, msg0['from'].bare, mnick, self.default_cipher, sock)
                 except:
                     del(sock)
+                    print('fail1')
                     self.sendMessageWrapper(msg0['from'].bare, msub, mnick, "disconnect me!".encode("UTF-8"), "chat")
                 return()
             else:
                 print('packet dropped')
-                if mbody not in ("disconnect me!".encode("UTF-8"), "_".encode("UTF-8")):
-                    self.sendMessageWrapper(msg0['from'].bare, msub, mnick, "disconnect me!".encode("UTF-8"), 'chat')
+                #if mbody not in ("disconnect me!".encode("UTF-8"), "_".encode("UTF-8")):
+                #    msub = self.default_cipher.decrypt(msg0['subject']).decode("UTF-8")
+                #    mnick = self.default_cipher.decrypt(msg0['nick']['nick']).decode("UTF-8")
+                #    print('fail2')
+                #    self.sendMessageWrapper(msg0['from'].bare, msub, mnick, "disconnect me!".encode("UTF-8"), 'chat')
         except:
             print("packet dropped")
 
@@ -118,6 +122,7 @@ class sockbot(sleekxmpp.ClientXMPP):
             self.client_socks[key].close()
             del(self.client_socks[key])
             local_address, peer, remote_address = key.split("==>")
+            print('fail3')
             self.sendMessageWrapper(peer, local_address, remote_address, 'disconnect me!'.encode("UTF-8"), 'chat')
 
     def sendMessageWrapper(self, mto0, mnick0, msubject0, mbody0, mtype0):
