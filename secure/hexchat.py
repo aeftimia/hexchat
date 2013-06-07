@@ -90,7 +90,6 @@ class sockbot(sleekxmpp.ClientXMPP):
                     self.add_socket(msub, msg0['from'].bare, mnick, self.default_cipher, sock)
                 except:
                     del(sock)
-                    print('fail1')
                     self.sendMessageWrapper(msg0['from'].bare, msub, mnick, "disconnect me!".encode("UTF-8"), "chat")
                 return()
             else:
@@ -122,7 +121,6 @@ class sockbot(sleekxmpp.ClientXMPP):
             self.client_socks[key].close()
             del(self.client_socks[key])
             local_address, peer, remote_address = key.split("==>")
-            print('fail3')
             self.sendMessageWrapper(peer, local_address, remote_address, 'disconnect me!'.encode("UTF-8"), 'chat')
 
     def sendMessageWrapper(self, mto0, mnick0, msubject0, mbody0, mtype0):
