@@ -32,7 +32,7 @@ class sockbot(sleekxmpp.ClientXMPP):
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
 
         #google is a little funny.
-        #your usename ends is @gmail.com
+        #your jid ends with @gmail.com
         #but you have to connect to talk.google.com, not gmail.com
         #sleekxmpp needs to be told of this explicitely.
         if jid.find("@gmail.com")!=-1:
