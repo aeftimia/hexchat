@@ -44,7 +44,7 @@ class sockbot(sleekxmpp.ClientXMPP):
         #the only unusual event handler here is the one for "message".
         #this is set to get_message and is used to filter data recieved over the chat server
         self.add_event_handler("session_start", self.session_start)
-        #self.add_event_handler("disconnected", lambda x: self.connect(self.connect_address))
+        self.add_event_handler("disconnected", lambda x: self.disconnected)
         self.add_event_handler("message", self.get_message)
         self.register_plugin('xep_0030') # Service Discovery
         self.register_plugin('xep_0045') # Multi-User Chat
@@ -67,6 +67,11 @@ class sockbot(sleekxmpp.ClientXMPP):
 
     def session_start(self, event):
         self.send_presence()
+
+    def self.disconnected():
+        print("XMPP chat server disconnected")
+        print("Trying to reconnect")
+        self.connect(self.connect_address)
 
     #get_message evaluates filters incomming xmpp messages
     #and directs them to the proper socket
