@@ -71,7 +71,10 @@ class sockbot(sleekxmpp.ClientXMPP):
     def self.disconnected():
         print("XMPP chat server disconnected")
         print("Trying to reconnect")
-        self.connect(self.connect_address)
+        if self.connect(self.connect_address):
+            print("connection reestabilshed")
+        else:
+            raise Exception(jid+" could not connect")
 
     #get_message evaluates filters incomming xmpp messages
     #and directs them to the proper socket
