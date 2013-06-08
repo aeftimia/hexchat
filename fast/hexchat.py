@@ -35,7 +35,7 @@ class sockbot(sleekxmpp.ClientXMPP):
         #your usename ends is @gmail.com
         #but you have to connect to talk.google.com, not gmail.com
         #sleekxmpp needs to be told of this explicitely.
-        if jid.find("gmail.com")!=-1:
+        if jid.find("@gmail.com")!=-1:
             self.connect_address = ("talk.google.com", 5222)
         else:
             self.connect_address = None
