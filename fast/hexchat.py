@@ -54,6 +54,10 @@ class sockbot(sleekxmpp.ClientXMPP):
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
         #every .001 seconds
+        #The arguements here are:
+        #0.0: wait 0.0 seconds for the system's poll call to timeout
+        #True: use poll (necessary for osx because select seems to raise errors when executed from within a multithreaded program)
+        #1: count=1. Only poll once then exit
         self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
 
         if self.connect(self.connect_address):
