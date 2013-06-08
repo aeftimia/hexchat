@@ -25,8 +25,8 @@ class sockbot(sleekxmpp.ClientXMPP):
         #map is a "socket map" used by asyncore
         #this basically keeps track of any and all tcp sockets
         #(except the ones used to connect directly to the xmpp server)
-        #asyncore uses this pretty transparently, so there is no need to
-        #worry about it too much.
+        #asyncore uses this pretty transparently,
+        #so there is no need to, worry about it too much.
         self.map = {}
         #initialize the sleekxmpp client.
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
