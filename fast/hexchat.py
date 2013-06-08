@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import asyncore, logging, socket, sleekxmpp, sys, base64
+import asyncore, socket, sleekxmpp, sys, base64
 
 if sys.version_info < (3, 0):
     reload(sys)
@@ -179,7 +179,6 @@ class sockbot(sleekxmpp.ClientXMPP):
             self.server_socks[local_address].listen(1023)
 
 if __name__ == '__main__':
-    #logging.basicConfig(level=1, format='%(levelname)-8s %(message)s')
     bots={}
     fd=open(sys.argv[1])
     lines=fd.read().splitlines()
@@ -194,4 +193,3 @@ if __name__ == '__main__':
         [local_address, peer, remote_address]=line.split('==>')   
         #add a server socket listening for incomming connections        
         bots[username].add_socket(local_address, peer, remote_address)
-    #asyncore.loop(0.05)
