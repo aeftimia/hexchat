@@ -68,7 +68,7 @@ class sockbot(sleekxmpp.ClientXMPP):
     def session_start(self, event):
         self.send_presence()
 
-    def self.disconnected():
+    def disconnected(self):
         print("XMPP chat server disconnected")
         print("Trying to reconnect")
         if self.connect(self.connect_address):
