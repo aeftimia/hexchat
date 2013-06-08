@@ -90,10 +90,15 @@ class sockbot(sleekxmpp.ClientXMPP):
             #portaddr_split is just where the IP ends and the port begins
             #i.e. the location of the first ":"
             portaddr_split=msg['subject'].rfind(':')
-            #connect the socket to the ip:port specified in the subject tag
-            sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:])))
-            #add the socket to sockbot's client_socks
-            self.add_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
+            try:
+                #connect the socket to the ip:port specified in the subject tag
+                sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:])))
+                #add the socket to sockbot's client_socks
+                self.add_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
+            except:
+                #if it could not connect, tell the sockbot on the the other side to disconnect
+                self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
+                
         #else:
         #The key was not found in the client_socks routing table.
         #this could be because the sockbot on the other end of the chat server
