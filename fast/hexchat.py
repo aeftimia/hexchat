@@ -1,17 +1,26 @@
 #!/usr/bin/env python
 import asyncore, logging, socket, sleekxmpp, sys, base64, pyasn1_modules
 
+# Python versions before 3.0 do not use UTF-8 encoding
+# by default. To ensure that Unicode is handled properly
+# throughout SleekXMPP, we will set the default encoding
+# ourselves to UTF-8.
 if sys.version_info < (3, 0):
     reload(sys)
     sys.setdefaultencoding('utf8')
 else:
     raw_input = input
 
-#this class exchanges data between tcp sockets and xmpp servers.
+"""this class exchanges data between tcp sockets and xmpp servers."""
 class bot(sleekxmpp.ClientXMPP):
-    #jid is the login username@chatserver
-    #password is the password to login with 
     def __init__(self, jid, password):
+        """
+        Initialize a hexchat XMPP bot. Also connect to the XMPP server.
+
+        'jid' is the login username@chatserver
+        'password' is the password to login with
+        """
+
         #server sockets is a like a routing table
         #that maps a local IP address that listens for tcp connections
         #to a path the traffic should take through the xmpp server
@@ -23,9 +32,11 @@ class bot(sleekxmpp.ClientXMPP):
         #(bound ip:port on client, xmpp username of server, ip:port server should forward data to)
         #and the values are connected sockets.
         self.client_sockets={}
+
         #map is a "socket map" used by asyncore
         #asyncore uses this pretty transparently, so there is no need to, worry about it too much.
         self.map = {}
+
         #initialize the sleekxmpp client.
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
 
@@ -50,15 +61,23 @@ class bot(sleekxmpp.ClientXMPP):
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
         self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
 
+        # Connect to XMPP server
         if self.connect(self.connect_address):
             self.process()
         else:
             raise(Exception(jid+" could not connect"))
 
     def session_start(self, event):
+        """Called when the bot connects and establishes a session with the XMPP server."""
+
+        # XMPP spec says that we should broadcast our presence when we connect.
         self.send_presence()
 
     def disconnected(self, event):
+        """Called when the bot disconnects from the XMPP server.
+        Try to reconnect.
+        """
+
         logging.warn("XMPP chat server disconnected")
         logging.debug("Trying to reconnect")
         if self.connect(self.connect_address):
@@ -66,11 +85,13 @@ class bot(sleekxmpp.ClientXMPP):
         else:
             raise(Exception(jid+" could not connect"))
 
-    #get_message evaluates filters incomming xmpp messages
-    #and directs them to the proper socket
     def get_message(self, msg):
-        #print a debug message that notifies the user of incomming data
-        #logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
+        """Handles incoming xmpp messages and directs them to the
+        proper socket
+        """
+
+        logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
+
         #construct a potential client sockets key from xml data
         key = (msg['subject'],msg['from'].bare,msg['nick']['nick'])
         if key in self.client_sockets:
@@ -83,6 +104,7 @@ class bot(sleekxmpp.ClientXMPP):
                 del(self.client_sockets[key])
             else:
                 self.client_sockets[key].send(base64.b64decode(msg['body'].encode("UTF-8")))
+
         elif msg['body']=='connect me!':
             sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setblocking(0)
@@ -99,10 +121,8 @@ class bot(sleekxmpp.ClientXMPP):
                     logging.debug(msg)
                     #if it could not connect, tell the bot on the the other side to disconnect
                     self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
-                
-        #else:
-        #The key was not found in the client_sockets routing table.
-        else:
+
+        else: # The key was not found in the client_sockets routing table and it was not a connect request.
             #Dropped packets seems to be the biggest bottleneck in this connection
             #Since the sockets are using tcp, they think the other party has sent and recieved data
             #by the time the message is piped to the xmpp server.
@@ -110,11 +130,10 @@ class bot(sleekxmpp.ClientXMPP):
             #This leads to some degree of unreliability
             #It seems that without raw sockets, this bottleneck is an inherent flaw in the xmpp tunnel design.
             logging.debug('packet dropped')
-            #if msg['body'] not in ("disconnect me!", "_"):
-            #    self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
 
-    #this is the function that gets called when a tcp socket is ready to be read
     def handle_read(self, local_address, peer, remote_address):
+        """Called when a TCP socket has stuff to be read from it."""
+
         key = (local_address,peer,remote_address)
         data=base64.b64encode(self.client_sockets[key].recv(8192)).decode("UTF-8")
         #remember, you generally cannot send blank messages over xmpp
@@ -124,9 +143,9 @@ class bot(sleekxmpp.ClientXMPP):
         else:
             self.sendMessageWrapper(peer, local_address, remote_address, "_", 'chat')
 
-    #this is the function that gets called when a tcp server socket gets a request
-    #to accept a connection
     def handle_accept(self, local_address, peer, remote_address):
+        """Called when we have a new incoming connection to one of our listening sockets."""
+
         connection, local_address = self.server_sockets[local_address].accept()
         local_address=local_address[0]+":"+str(local_address[1])
         #add the new connected socket to client_sockets
@@ -144,14 +163,22 @@ class bot(sleekxmpp.ClientXMPP):
             #send a disconnection request to the bot waiting on the other side of the xmpp server
             self.sendMessageWrapper(peer, local_address, remote_address, 'disconnect me!', 'chat')
 
-    #this just sends a message using sleekxmpp's sendMessage function
-    #It also prints a debug message indicating data being sent
     def sendMessageWrapper(self, mto0, mnick0, msubject0, mbody0, mtype0):
-        #logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
+        """Wrapper over sleekxmpp's sendMessage function.
+
+        * mto - The recipient of the message.
+        * mbody - The main contents of the message.
+        * msubject - Optional subject for the message.
+        * mtype - The message's type, such as 'chat' or 'groupchat'.
+        * mnick - Optional nickname of the sender.
+        """
+
+        logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
         self.sendMessage(mto=mto0, mnick=mnick0, msubject=msubject0, mbody=mbody0, mtype=mtype0)
 
-    #this adds a socket to the bot's routing table
     def add_socket(self, local_address, peer, remote_address, sock=None):
+        """Add socket to the bot's routing table."""
+
         #if a connected socket, sock, is supplied, add it to the client_sockets routing table
         if sock != None:
             #key is the key to the client_sockets routing table
@@ -165,7 +192,7 @@ class bot(sleekxmpp.ClientXMPP):
             self.client_sockets[key].writable=lambda: False
             self.client_sockets[key].handle_read=lambda: self.handle_read(local_address, peer, remote_address)
             self.client_sockets[key].handle_close=lambda: self.handle_close(key)
-        #if no sock is supplied, 
+        #if no sock is supplied,
         #it must be a server socket listening for connections
         else:
             portaddr_split=local_address.rfind(':')
@@ -188,7 +215,7 @@ if __name__ == '__main__':
             raise(Exception("Wrong number of command line arguements"))
         else:
             username=sys.argv[3]
-            password=sys.argv[4] 
+            password=sys.argv[4]
             bot0=bot(username, password)
             if len(sys.argv)==10:
                 bot0.add_socket(sys.argv[5]+":"+sys.argv[6], sys.argv[7], sys.argv[8]+":"+sys.argv[9])
@@ -209,9 +236,9 @@ if __name__ == '__main__':
                     continue
                 except IndexError:
                     raise(Exception("No password supplied."))
-            [local_address, peer, remote_address]=line.split('==>')   
+            [local_address, peer, remote_address]=line.split('==>')
             #add a server socket listening for incomming connections
-            try:        
+            try:
                 bots[username].add_socket(local_address, peer, remote_address)
             except socket.error as msg:
                 raise(msg)
