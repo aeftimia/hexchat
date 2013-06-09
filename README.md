@@ -15,3 +15,14 @@ and a server's config file might look like this:
 server@XMPPserver.com:password:
 
 When using this program, simply have all computers participating in the port forwarding process running instance of this program with the proper config files. In this case, a user on the client machine would ssh to localhost:12345. The client's program would send a connection request to server@XMPPserver and specify the destination port (localhost:22) in the subject xml tag. The client also specifies the port of the connected TCP socket in the "from nickname" xml tag. The server establishes a connection to the requested port, and adds an entry to its routing table. At this point, client and server are indistinguishable. Both go through the same process of recieving inbound data, redirecting it to the port in the subject tag, and sending outbound data to the proper remote ip:port combination filling out the subject, "from nickname" tags to determine the data's destination and source respectively. 
+
+The syntax for running the program is:
+python hexchat.py config_file log_file
+
+If you wish to use command line arguements rather than a config file, you can run the program as a server with:
+
+python hexchat.py -c log_file username@chatserver 'password'
+
+or as a client with:
+
+python hexchat.py -c log_file username@chatserver 'password' local_ip port username2@chatserver remote_ip port
