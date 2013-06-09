@@ -1,0 +1,33 @@
+hexchat
+
+0. Protocol Overview
+This protocol uses an xmpp chat service as a means to forward tcp traffic from one computer to another. It listens on a port on one computer and forwards data through a chat server to another computer logged into the same chat server.
+
+1. Motivation
+Many countries that censor their citizens' internet access allow access to xmpp chat servers such as google chat. With the appropriate software, these chat servers can be used to connect and relay traffic to tor bridges. Since most xmpp servers support encryption, it would be difficult stop tor traffic from being relayed through xmpp chat servers without blocking access to the chat server itself. 
+
+2. Connecting
+a. Client Side
+When a client initiates a connection to an ip:port running hexchat, a "connect me!" message is sent to the appropriate username on the chat server hexchat is connected to. The ip:port of the connected socket is sent in the "nick" xml tag and the ip:port the recipient should connect to is sent in "subject" xml tag. The client adds this "connected ip:port"==>xmpp user==>"ip:port to connect to on server side" route as a tuple to its routing table.
+
+b. Server Side
+When a hexchat bot recieves a message, it checks if the "nick", "from", and "subject" match an entry in its routing table. If they do not, it checks if the message is "connect me!" If it is, the bot opens a connection to the ip:port in the subject tag, and adds the following route:
+"connected ip:port"==>xmpp sender==>"ip:port of connected socket on client side"
+as a tuple to its routing table. 
+
+If the bot on the server side could not connect to the requested ip:port, a "disconnect me!" message is sent back to the bot on the client side to tell it to disconnect.
+
+3. Data Exchange
+When data is sent to a socket, it is encoded in base 64 and passed to the appropriate xmpp username. The socket's ip:port is specified in the nick xml tag and the destination's ip:port is specified in the subject xml tag. When the data is recieved, it is decoded and passed to the appropriate socket (as determined by the nick, subject, and from xml tags).
+
+note: Since xmpp servers do not seem to forward blank messages, a "_" is used to signify a blank message. This is not encoded in base 64 and when recieved, is interpreted as a blank message.
+
+4. Closing
+a. Initiation
+When a socket closes, a "disconnect me!" message is sent to the appropriate xmpp username. The socket's ip:port is specified in the nick xml tag and the destination's ip:port is specified in the subject xml tag. 
+
+b. Completion
+When a bot recieves a "disconnect me!" message with nick, subject, and from xml tags that match an entry in its routing table, it closes the appropriate socket and deletes the entry from its routing table. 
+
+4. Acknowledgments
+Thanks to asn and the other tor developers for encoraging this idea and all of the useful feedback.

@@ -1,0 +1,27 @@
+Threat model for the hexchat obfuscation protocol
+Alex Eftimiades
+
+0. Abstract
+The threat model for the 'hexchat' protocol obfuscator is discussed along with its limitations and implications for the protocol design. The 'hexchat' protocol is documented in the 'doc/protocol-spec.txt' file in the hexchat distribution.
+
+1. Adversary capabilities and non-capabilities
+The adversary is assumed to hold a blacklist of network protocols which it is interested in blocking. XMPP is assumed not to be in this blacklist. Furthermore, the adversary is assumed to allow XMPP traffic to at least one XMPP chat server.
+
+2. The adversary's goals
+The censor wants to ban something that is not XMPP traffic. This could be words or phrases, websites/ip addresses, port numbers and/or encrypted traffic.
+
+3. Goals of hexchat
+Currently, most attackers in the category described above implement their censorship by one or more firewalls that looking for protocol signatures and block protocols matching those signatures. These signatures are typically in the form of static strings to be matched or regular expressions to be evaluated, over a packet or TCP flow.
+
+Hexchat is designed to evade these pattern matching techniques by sending traffic over an XMPP chatline. Since most XMPP chat servers support or require encryption, even xml tags are typically inaccessible to the censor. 
+
+Hexchat can also be used to access tor bridges whose IPs have been already been blocked by the censor. 
+
+4. Non-goals of hexchat
+
+Hexchat does not protect against:
+-attackers that measure packet entropy.
+-attackers that block XMPP traffic.
+-attackers that block encrypted traffic and are capable of matching xml tags to IP:Port strings.
+-attackers that measure timing of XMPP traffic.
+-attackers that have access to XMPP chat servers with the ability and will to disclose any of the above information.
