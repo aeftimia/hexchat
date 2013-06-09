@@ -116,7 +116,7 @@ class bot(sleekxmpp.ClientXMPP):
                     #connect the socket to the ip:port specified in the subject tag
                     sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:])))
                     #add the socket to bot's client_sockets
-                    self.add_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
+                    self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
                 except socket.error as msg:
                     logging.debug(msg)
                     #if it could not connect, tell the bot on the the other side to disconnect
@@ -150,7 +150,7 @@ class bot(sleekxmpp.ClientXMPP):
         connection, local_address = self.server_sockets[local_address].accept()
         local_address=local_address[0]+":"+str(local_address[1])
         #add the new connected socket to client_sockets
-        self.add_socket(local_address, peer, remote_address, connection)
+        self.add_client_socket(local_address, peer, remote_address, connection)
         #send a connection request to the bot waiting on the other side of the xmpp server
         self.sendMessageWrapper(peer, local_address, remote_address, 'connect me!', 'chat')
 
@@ -177,37 +177,35 @@ class bot(sleekxmpp.ClientXMPP):
         logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
         self.sendMessage(mto=mto0, mnick=mnick0, msubject=msubject0, mbody=mbody0, mtype=mtype0)
 
-    def add_socket(self, local_address, peer, remote_address, sock=None):
+    def add_client_socket(self, local_address, peer, remote_address, sock):
         """Add socket to the bot's routing table."""
 
-        #if a connected socket, sock, is supplied, add it to the client_sockets routing table
-        if sock != None:
-            #key is the key to the client_sockets routing table
-            #it consists of a local_address, a peer (the username@chatserver of the other party), and a remote_address
-            #keep in mind, the remote address is the address read by the bot at the other end
-            #so it is probably going to be 127.0.0.1, not an external ip address
-            #(unless you want the remote computer to connect to some external ip address)
-            key=(local_address,peer,remote_address)
-            self.client_sockets[key] = asyncore.dispatcher(sock, map=self.map)
+        assert(sock)
+
+        # Calculate the client_sockets identifier for this socket, and put in the dict.
+        key=(local_address,peer,remote_address)
+        self.client_sockets[key] = asyncore.dispatcher(sock, map=self.map)
+
+        #just some asyncore initialization stuff
+        self.client_sockets[key].writable=lambda: False
+        self.client_sockets[key].handle_read=lambda: self.handle_read(local_address, peer, remote_address)
+        self.client_sockets[key].handle_close=lambda: self.handle_close(key)
+
+    def add_server_socket(self, local_address, peer, remote_address):
+        """Create a listener and put it in the server_sockets dictionary."""
+
+        portaddr_split=local_address.rfind(':')
+        if portaddr_split!=-1:
+            self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
             #just some asyncore initialization stuff
-            self.client_sockets[key].writable=lambda: False
-            self.client_sockets[key].handle_read=lambda: self.handle_read(local_address, peer, remote_address)
-            self.client_sockets[key].handle_close=lambda: self.handle_close(key)
-        #if no sock is supplied,
-        #it must be a server socket listening for connections
+            self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_sockets[local_address].writable=lambda: False
+            self.server_sockets[local_address].set_reuse_addr()
+            self.server_sockets[local_address].bind((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
+            self.server_sockets[local_address].handle_accept = lambda: self.handle_accept(local_address, peer, remote_address)
+            self.server_sockets[local_address].listen(1023)
         else:
-            portaddr_split=local_address.rfind(':')
-            if portaddr_split!=-1:
-                self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
-                #just some asyncore initialization stuff
-                self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.server_sockets[local_address].writable=lambda: False
-                self.server_sockets[local_address].set_reuse_addr()
-                self.server_sockets[local_address].bind((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
-                self.server_sockets[local_address].handle_accept = lambda: self.handle_accept(local_address, peer, remote_address)
-                self.server_sockets[local_address].listen(1023)
-            else:
-                raise(Exception("No port specified"))
+            raise(Exception("No port specified"))
 
 if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
@@ -219,7 +217,7 @@ if __name__ == '__main__':
             password=sys.argv[4]
             bot0=bot(username, password)
             if len(sys.argv)==10:
-                bot0.add_socket(sys.argv[5]+":"+sys.argv[6], sys.argv[7], sys.argv[8]+":"+sys.argv[9])
+                bot0.add_server_socket(sys.argv[5]+":"+sys.argv[6], sys.argv[7], sys.argv[8]+":"+sys.argv[9])
     else:
         if len(sys.argv)!=3:
             raise(Exception("Wrong number of command line arguements"))
@@ -240,6 +238,6 @@ if __name__ == '__main__':
             [local_address, peer, remote_address]=line.split('==>')
             #add a server socket listening for incomming connections
             try:
-                bots[username].add_socket(local_address, peer, remote_address)
+                bots[username].add_server_socket(local_address, peer, remote_address)
             except socket.error as msg:
                 raise(msg)
