@@ -5,7 +5,6 @@ import socket
 import sleekxmpp
 import sys
 import base64
-import pyasn1_modules
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
