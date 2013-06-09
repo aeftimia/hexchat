@@ -118,7 +118,7 @@ class bot(sleekxmpp.ClientXMPP):
             portaddr_split=msg['subject'].rfind(':')
             if portaddr_split!=-1:
                 #connect the socket to the ip:port specified in the subject tag
-                if not sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:]))):
+                if sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:]))):
                     logging.debug("connecting to "+msg['subject'])
                     #add the socket to bot's client_sockets
                     self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
