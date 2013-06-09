@@ -29,5 +29,5 @@ When a socket closes, a "disconnect me!" message is sent to the appropriate xmpp
 b. Completion
 When a bot recieves a "disconnect me!" message with nick, subject, and from xml tags that match an entry in its routing table, it closes the appropriate socket and deletes the entry from its routing table. 
 
-4. Acknowledgments
+5. Acknowledgments
 Thanks to asn and the other tor developers for encoraging this idea and all of the useful feedback.
