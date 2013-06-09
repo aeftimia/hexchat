@@ -109,7 +109,7 @@ class bot(sleekxmpp.ClientXMPP):
             #The problem is if one party disconnects while the other sends a message, the packet has to be dropped
             #This leads to some degree of unreliability
             #It seems that without raw sockets, this bottleneck is an inherent flaw in the xmpp tunnel design.
-            logging.warn('packet dropped')
+            logging.debug('packet dropped')
             #if msg['body'] not in ("disconnect me!", "_"):
             #    self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
 
@@ -182,7 +182,7 @@ class bot(sleekxmpp.ClientXMPP):
                 raise(Exception("No port specified"))
 
 if __name__ == '__main__':
-    logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
+    logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
     if sys.argv[1]=="-c":
         if not len(sys.argv) in (5,10):
             raise(Exception("Wrong number of command line arguements"))
