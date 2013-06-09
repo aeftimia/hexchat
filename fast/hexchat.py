@@ -70,7 +70,7 @@ class bot(sleekxmpp.ClientXMPP):
     #and directs them to the proper socket
     def get_message(self, msg):
         #print a debug message that notifies the user of incomming data
-        logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
+        #logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
         #construct a potential client sockets key from xml data
         key = (msg['subject'],msg['from'].bare,msg['nick']['nick'])
         if key in self.client_sockets:
@@ -147,7 +147,7 @@ class bot(sleekxmpp.ClientXMPP):
     #this just sends a message using sleekxmpp's sendMessage function
     #It also prints a debug message indicating data being sent
     def sendMessageWrapper(self, mto0, mnick0, msubject0, mbody0, mtype0):
-        logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
+        #logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
         self.sendMessage(mto=mto0, mnick=mnick0, msubject=msubject0, mbody=mbody0, mtype=mtype0)
 
     #this adds a socket to the bot's routing table
