@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import asyncore, logging, socket, sleekxmpp, sys, base64
+import asyncore, logging, socket, sleekxmpp, sys, base64, pyasn1_modules
 
 if sys.version_info < (3, 0):
     reload(sys)
@@ -44,8 +44,6 @@ class bot(sleekxmpp.ClientXMPP):
         self.add_event_handler("session_start", self.session_start)
         self.add_event_handler("disconnected", self.disconnected)
         self.add_event_handler("message", self.get_message)
-        self.register_plugin('xep_0030') # Service Discovery
-        self.register_plugin('xep_0199') # XMPP Ping
 
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
