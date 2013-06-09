@@ -5,6 +5,7 @@ import socket
 import sleekxmpp
 import sys
 import base64
+import time
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -116,13 +117,13 @@ class bot(sleekxmpp.ClientXMPP):
             #i.e. the location of the first ":"
             portaddr_split=msg['subject'].rfind(':')
             if portaddr_split!=-1:
-                try:
-                    #connect the socket to the ip:port specified in the subject tag
-                    sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:])))
+                #connect the socket to the ip:port specified in the subject tag
+                if not sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:]))):
+                    logging.debug("connecting to "+msg['subject'])
                     #add the socket to bot's client_sockets
                     self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
-                except socket.error as msg:
-                    logging.debug(msg)
+                else:
+                    logging.warn("could not connect to "+msg['subject'])
                     #if it could not connect, tell the bot on the the other side to disconnect
                     self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
 
@@ -246,3 +247,7 @@ if __name__ == '__main__':
                 bots[username].add_server_socket(local_address, peer, remote_address)
             except socket.error as msg:
                 raise(msg)
+                
+    #program needs to be kept running on linux
+    while True:
+        time.sleep(1)
