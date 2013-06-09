@@ -21,16 +21,15 @@ class bot(sleekxmpp.ClientXMPP):
         'password' is the password to login with
         """
 
-        #server sockets is a like a routing table
-        #that maps a local IP address that listens for tcp connections
-        #to a path the traffic should take through the xmpp server
+        # <local_address> => <listening_socket> dictionary,
+        # where 'local_address' is an IP:PORT string with the locallistening address,
+        # and 'listening_socket' is the socket that listens and accepts connections on that address.
         self.server_sockets={}
-        #client sockets is like a routing table
-        #that maps a connected tcp socket
-        #to a path the traffic should take through an xmpp server
-        #the keys are tuples of the form:
-        #(bound ip:port on client, xmpp username of server, ip:port server should forward data to)
-        #and the values are connected sockets.
+
+        # <connection_id> => <xmpp_socket> dictionary,
+        # where 'connection_id' is a tuple of the form:
+        # (bound ip:port on client, xmpp username of server, ip:port server should forward data to)
+        # and 'xmpp_socket' is a sleekxmpp socket that speaks to the XMPP bot on the other side.
         self.client_sockets={}
 
         #map is a "socket map" used by asyncore
@@ -195,17 +194,18 @@ class bot(sleekxmpp.ClientXMPP):
         """Create a listener and put it in the server_sockets dictionary."""
 
         portaddr_split=local_address.rfind(':')
-        if portaddr_split!=-1:
-            self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
-            #just some asyncore initialization stuff
-            self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_sockets[local_address].writable=lambda: False
-            self.server_sockets[local_address].set_reuse_addr()
-            self.server_sockets[local_address].bind((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
-            self.server_sockets[local_address].handle_accept = lambda: self.handle_accept(local_address, peer, remote_address)
-            self.server_sockets[local_address].listen(1023)
-        else:
-            raise(Exception("No port specified"))
+        if portaddr_split == -1:
+            raise(Exception("No port specified"+local_address))
+
+        self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
+
+        #just some asyncore initialization stuff
+        self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sockets[local_address].writable=lambda: False
+        self.server_sockets[local_address].set_reuse_addr()
+        self.server_sockets[local_address].bind((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
+        self.server_sockets[local_address].handle_accept = lambda: self.handle_accept(local_address, peer, remote_address)
+        self.server_sockets[local_address].listen(1023)
 
 if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
