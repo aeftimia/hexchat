@@ -18,7 +18,6 @@ Hexchat is designed to evade these pattern matching techniques by sending traffi
 Hexchat can also be used to access tor bridges whose IPs have been already been blocked by the censor. 
 
 4. Non-goals of hexchat
-
 Hexchat does not protect against:
 -attackers that measure packet entropy.
 -attackers that block XMPP traffic.
