@@ -136,12 +136,13 @@ class bot(sleekxmpp.ClientXMPP):
 
         key = (local_address,peer,remote_address)
         data=base64.b64encode(self.client_sockets[key].recv(8192)).decode("UTF-8")
+
         #remember, you generally cannot send blank messages over xmpp
         #so blank messages are represented by a "_"
-        if data:
-            self.sendMessageWrapper(peer, local_address, remote_address, data, 'chat')
-        else:
-            self.sendMessageWrapper(peer, local_address, remote_address, "_", 'chat')
+        if not data:
+            data = "_"
+
+        self.sendMessageWrapper(peer, local_address, remote_address, data, 'chat')
 
     def handle_accept(self, local_address, peer, remote_address):
         """Called when we have a new incoming connection to one of our listening sockets."""
