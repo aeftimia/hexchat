@@ -95,7 +95,7 @@ class bot(sleekxmpp.ClientXMPP):
         proper socket
         """
 
-        logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
+        #logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
 
         #construct a potential client sockets key from xml data
         key = (msg['subject'],msg['from'].bare,msg['nick']['nick'])
@@ -179,7 +179,7 @@ class bot(sleekxmpp.ClientXMPP):
         * mnick - Optional nickname of the sender.
         """
 
-        logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
+        #logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
         self.sendMessage(mto=mto0, mnick=mnick0, msubject=msubject0, mbody=mbody0, mtype=mtype0)
 
     def add_client_socket(self, local_address, peer, remote_address, sock):
