@@ -112,21 +112,18 @@ class bot(sleekxmpp.ClientXMPP):
 
         elif msg['body']=='connect me!':
             sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setblocking(0)
+            sock.setblocking(1)
             #portaddr_split is just where the IP ends and the port begins
             #i.e. the location of the first ":"
             portaddr_split=msg['subject'].rfind(':')
             if portaddr_split!=-1:
                 try:
                     #connect the socket to the ip:port specified in the subject tag
-                    if sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:]))):
-                        logging.debug("connecting to "+msg['subject'])
-                        #add the socket to bot's client_sockets
-                        self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
-                    else:
-                        logging.warn("could not connect to "+msg['subject'])
-                        #if it could not connect, tell the bot on the the other side to disconnect
-                        self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
+                    sock.connect((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:])))
+                    sock.setblocking(0)
+                    logging.debug("connecting to "+msg['subject'])
+                    #add the socket to bot's client_sockets
+                    self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
                 except (socket.error, OverflowError, ValueError):
                         logging.warn("could not connect to "+msg['subject'])
                         #if it could not connect, tell the bot on the the other side to disconnect
