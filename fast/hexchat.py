@@ -127,7 +127,7 @@ class bot(sleekxmpp.ClientXMPP):
                         logging.warn("could not connect to "+msg['subject'])
                         #if it could not connect, tell the bot on the the other side to disconnect
                         self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
-                except (socket.error, OverflowError):
+                except (socket.error, OverflowError, ValueError):
                         logging.warn("could not connect to "+msg['subject'])
                         #if it could not connect, tell the bot on the the other side to disconnect
                         self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
@@ -250,7 +250,7 @@ if __name__ == '__main__':
             #add a server socket listening for incomming connections
             try:
                 bots[username].add_server_socket(local_address, peer, remote_address)
-            except (OverflowError, socket.error) as msg:
+            except (OverflowError, socket.error, ValueError) as msg:
                 raise(msg)
                 
     #program needs to be kept running on linux
