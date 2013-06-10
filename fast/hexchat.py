@@ -168,6 +168,13 @@ class bot(sleekxmpp.ClientXMPP):
 
         #logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
         self.sendMessage(mto=mto0, mnick=mnick0, msubject=msubject0, mbody=mbody0, mtype=mtype0)
+        
+    def handle_connect(self, client_socket, key):
+        local_address=key[0]
+        logging.debug("connecting to "+local_address)
+        
+        #add the socket to bot's client_sockets
+        self.client_sockets[key]=client_socket        
 
     def initiate_connection(self, local_address, peer, remote_address):
             #portaddr_split is just where the IP ends and the port begins
@@ -182,13 +189,11 @@ class bot(sleekxmpp.ClientXMPP):
                 client_socket.writable=lambda: False
                 client_socket.handle_read=lambda: self.handle_read(local_address, peer, remote_address)
                 client_socket.handle_close=lambda: self.handle_close(key)
-                client_socket.handle_connect=lambda: logging.debug("connecting to "+local_address)
+                client_socket.handle_connect=lambda: self.handle_connect(client_socket, key)
                 client_socket.create_socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
                     #connect the socket to the ip:port specified in the subject tag
                     client_socket.connect((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
-                    #add the socket to bot's client_sockets
-                    self.client_sockets[key]=client_socket
                 except (socket.error, OverflowError, ValueError):
                         logging.warn("could not connect to "+msg['subject'])
                         #if it could not connect, tell the bot on the the other side to disconnect
