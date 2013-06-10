@@ -117,16 +117,21 @@ class bot(sleekxmpp.ClientXMPP):
             #i.e. the location of the first ":"
             portaddr_split=msg['subject'].rfind(':')
             if portaddr_split!=-1:
-                #connect the socket to the ip:port specified in the subject tag
-                if sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:]))):
-                    logging.debug("connecting to "+msg['subject'])
-                    #add the socket to bot's client_sockets
-                    self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
-                else:
-                    logging.warn("could not connect to "+msg['subject'])
-                    #if it could not connect, tell the bot on the the other side to disconnect
-                    self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
-
+                try:
+                    #connect the socket to the ip:port specified in the subject tag
+                    if sock.connect_ex((msg['subject'][:portaddr_split], int(msg['subject'][portaddr_split+1:]))):
+                        logging.debug("connecting to "+msg['subject'])
+                        #add the socket to bot's client_sockets
+                        self.add_client_socket(msg['subject'], msg['from'].bare, msg['nick']['nick'], sock)
+                    else:
+                        logging.warn("could not connect to "+msg['subject'])
+                        #if it could not connect, tell the bot on the the other side to disconnect
+                        self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
+                except socket.error:
+                        logging.warn("could not connect to "+msg['subject'])
+                        #if it could not connect, tell the bot on the the other side to disconnect
+                        self.sendMessageWrapper(msg['from'].bare, msg['subject'], msg['nick']['nick'], "disconnect me!", 'chat')
+                        
         else: # The key was not found in the client_sockets routing table and it was not a connect request.
             #Dropped packets seems to be the biggest bottleneck in this connection
             #Since the sockets are using tcp, they think the other party has sent and recieved data
