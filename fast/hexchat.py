@@ -250,7 +250,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.server_sockets[local_address].listen(1023)
 
 if __name__ == '__main__':
-    logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
+    logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
     if sys.argv[1]=="-c":
         if not len(sys.argv) in (5,10):
             raise(Exception("Wrong number of command line arguements"))
