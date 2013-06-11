@@ -127,7 +127,7 @@ class bot(sleekxmpp.ClientXMPP):
                 #It seems that without raw sockets, this bottleneck is an inherent flaw in the xmpp tunnel design.
                 logging.debug('packet dropped')
 
-        elif msg.get_type=='error':
+        elif msg_type=='error':
             key = (msg['nick']['nick'],msg['from'].bare,msg['subject'])
             if key in self.client_sockets:
                 #resend the message
