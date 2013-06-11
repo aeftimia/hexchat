@@ -6,6 +6,7 @@ import sleekxmpp
 import sys
 import base64
 import time
+import threading
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -95,7 +96,7 @@ class bot(sleekxmpp.ClientXMPP):
         proper socket
         """
 
-        #logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
+        logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
 
         #construct a potential client sockets key from xml data
         key = (msg['subject'],msg['from'].bare,msg['nick']['nick'])
@@ -103,16 +104,16 @@ class bot(sleekxmpp.ClientXMPP):
             #_ = blank message. xmpp does not ordinarily send blank messages,
             #so _ is used to signify it.
             if msg['body']=="_":
-                self.client_sockets[key].send(b'')
+                self.client_sockets[key].buffer+=b''
             elif msg['body']=="disconnect me!":
                 self.client_sockets[key].close()
                 del(self.client_sockets[key])
             else:
-                self.client_sockets[key].send(base64.b64decode(msg['body'].encode("UTF-8")))
+                self.client_sockets[key].buffer+=base64.b64decode(msg['body'].encode("UTF-8"))
 
         elif msg['body']=='connect me!':
             #try to connect and add the connected socket to the bot's client_sockets
-            self.initiate_connection(msg['subject'], msg['from'].bare, msg['nick']['nick'])
+            threading.Thread(target=lambda: self.initiate_connection(msg['subject'], msg['from'].bare, msg['nick']['nick'])).start()
 
         else: # The key was not found in the client_sockets routing table and it was not a connect request.
             #Dropped packets seems to be the biggest bottleneck in this connection
@@ -135,6 +136,11 @@ class bot(sleekxmpp.ClientXMPP):
             data = "_"
 
         self.sendMessageWrapper(peer, local_address, remote_address, data, 'chat')
+
+    def handle_write(self, key):
+        """Called when a TCP socket has stuff to be written to it."""
+        data=self.client_sockets[key].buffer
+        self.client_sockets[key].buffer=self.client_sockets[key].buffer[self.client_sockets[key].send(data):]
 
     def handle_accept(self, local_address, peer, remote_address):
         """Called when we have a new incoming connection to one of our listening sockets."""
@@ -166,38 +172,49 @@ class bot(sleekxmpp.ClientXMPP):
         * mnick - Optional nickname of the sender.
         """
 
-        #logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
+        logging.debug(mnick0+"==>"+msubject0+":"+mbody0)
         self.sendMessage(mto=mto0, mnick=mnick0, msubject=msubject0, mbody=mbody0, mtype=mtype0)
         
     def handle_connect(self, client_socket, key):
         local_address=key[0]
         logging.debug("connecting to "+local_address)
-        
+        client_socket.setblocking(0)
         #add the socket to bot's client_sockets
-        self.client_sockets[key]=client_socket        
+        self.client_sockets[key]=client_socket
 
     def initiate_connection(self, local_address, peer, remote_address):
-            #portaddr_split is just where the IP ends and the port begins
-            #i.e. the location of the last ":"
-            portaddr_split=local_address.rfind(':')
-            if portaddr_split!=-1:
-                # Calculate the client_socket's identifier
-                key=(local_address,peer,remote_address)
-                
-                #just some asyncore initialization stuff
-                client_socket=asyncore.dispatcher(map=self.map)
-                client_socket.writable=lambda: False
-                client_socket.handle_read=lambda: self.handle_read(local_address, peer, remote_address)
-                client_socket.handle_close=lambda: self.handle_close(key)
-                client_socket.handle_connect=lambda: self.handle_connect(client_socket, key)
-                client_socket.create_socket(socket.AF_INET, socket.SOCK_STREAM)
-                try:
-                    #connect the socket to the ip:port specified in the subject tag
-                    client_socket.connect((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
-                except (socket.error, OverflowError, ValueError):
-                        logging.warn("could not connect to "+msg['subject'])
-                        #if it could not connect, tell the bot on the the other side to disconnect
-                        self.sendMessageWrapper(peer, local_address, remote_address, "disconnect me!", 'chat')
+        #portaddr_split is just where the IP ends and the port begins
+        #i.e. the location of the last ":"
+        portaddr_split=local_address.rfind(':')
+        if portaddr_split!=-1:
+            #construct identifier for client_sockets
+            key=(local_address, peer, remote_address)
+            #pretend socket is already connected in case data is recieved while connecting
+            self.client_sockets[key] = asyncore.dispatcher(map=self.map)
+            #just some asyncore initialization stuff
+            self.client_sockets[key].buffer=b''
+            self.client_sockets[key].writable=lambda: False
+            self.client_sockets[key].readable=lambda: False
+
+            try:
+                #connect the socket to the ip:port specified in the subject tag
+                connected_socket=socket.create_connection((local_address[:portaddr_split], int(local_address[portaddr_split+1:])))
+                #if successful, attach the socket to the appropriate client_sockets and fix the methods
+                logging.debug("connecting to "+local_address)
+                #asyncore initialization stuff that would have taken place if the socket was given during initialization
+                self.client_sockets[key].set_socket(connected_socket)
+                self.client_sockets[key].connected = True
+                self.client_sockets[key].socket.setblocking(0)
+                #fixing methods
+                self.client_sockets[key].writable=lambda: len(self.client_sockets[key].buffer)>0
+                self.client_sockets[key].handle_write=lambda: self.handle_write(key)
+                self.client_sockets[key].readable=lambda: True
+                self.client_sockets[key].handle_read=lambda: self.handle_read(local_address, peer, remote_address)
+            except (socket.error, OverflowError, ValueError):
+                    logging.warn("could not connect to "+local_address)
+                    del(self.client_sockets[key])
+                    #if it could not connect, tell the bot on the the other side to disconnect
+                    self.sendMessageWrapper(peer, local_address, remote_address, "disconnect me!", 'chat')
 
     def add_client_socket(self, local_address, peer, remote_address, sock):
         """Add socket to the bot's routing table."""
@@ -209,7 +226,9 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key] = asyncore.dispatcher(sock, map=self.map)
 
         #just some asyncore initialization stuff
-        self.client_sockets[key].writable=lambda: False
+        self.client_sockets[key].buffer=b''
+        self.client_sockets[key].writable=lambda: len(self.client_sockets[key].buffer)>0
+        self.client_sockets[key].handle_write=lambda: self.handle_write(key)
         self.client_sockets[key].handle_read=lambda: self.handle_read(local_address, peer, remote_address)
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
                         
@@ -231,7 +250,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.server_sockets[local_address].listen(1023)
 
 if __name__ == '__main__':
-    logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
+    logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
     if sys.argv[1]=="-c":
         if not len(sys.argv) in (5,10):
             raise(Exception("Wrong number of command line arguements"))
