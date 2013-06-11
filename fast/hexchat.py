@@ -95,34 +95,43 @@ class bot(sleekxmpp.ClientXMPP):
         """Handles incoming xmpp messages and directs them to the
         proper socket
         """
+        msg_type=msg.get_type()
+        
+        if msg_type=='chat':
 
-        logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
+            logging.debug(msg['subject']+"<=="+msg['nick']['nick']+":"+msg['body'])
 
-        #construct a potential client sockets key from xml data
-        key = (msg['subject'],msg['from'].bare,msg['nick']['nick'])
-        if key in self.client_sockets:
-            #_ = blank message. xmpp does not ordinarily send blank messages,
-            #so _ is used to signify it.
-            if msg['body']=="_":
-                self.client_sockets[key].buffer+=b''
-            elif msg['body']=="disconnect me!":
-                self.client_sockets[key].close()
-                del(self.client_sockets[key])
-            else:
-                self.client_sockets[key].buffer+=base64.b64decode(msg['body'].encode("UTF-8"))
+            #construct a potential client sockets key from xml data
+            key = (msg['subject'],msg['from'].bare,msg['nick']['nick'])
+            if key in self.client_sockets:
+                #_ = blank message. xmpp does not ordinarily send blank messages,
+                #so _ is used to signify it.
+                if msg['body']=="_":
+                    self.client_sockets[key].buffer+=b''
+                elif msg['body']=="disconnect me!":
+                    self.client_sockets[key].close()
+                    del(self.client_sockets[key])
+                else:
+                    self.client_sockets[key].buffer+=base64.b64decode(msg['body'].encode("UTF-8"))
 
-        elif msg['body']=='connect me!':
-            #try to connect and add the connected socket to the bot's client_sockets
-            threading.Thread(target=lambda: self.initiate_connection(msg['subject'], msg['from'].bare, msg['nick']['nick'])).start()
+            elif msg['body']=='connect me!':
+                #try to connect and add the connected socket to the bot's client_sockets
+                threading.Thread(target=lambda: self.initiate_connection(msg['subject'], msg['from'].bare, msg['nick']['nick'])).start()
 
-        else: # The key was not found in the client_sockets routing table and it was not a connect request.
-            #Dropped packets seems to be the biggest bottleneck in this connection
-            #Since the sockets are using tcp, they think the other party has sent and recieved data
-            #by the time the message is piped to the xmpp server.
-            #The problem is if one party disconnects while the other sends a message, the packet has to be dropped
-            #This leads to some degree of unreliability
-            #It seems that without raw sockets, this bottleneck is an inherent flaw in the xmpp tunnel design.
-            logging.debug('packet dropped')
+            else: # The key was not found in the client_sockets routing table and it was not a connect request.
+                #Dropped packets seems to be the biggest bottleneck in this connection
+                #Since the sockets are using tcp, they think the other party has sent and recieved data
+                #by the time the message is piped to the xmpp server.
+                #The problem is if one party disconnects while the other sends a message, the packet has to be dropped
+                #This leads to some degree of unreliability
+                #It seems that without raw sockets, this bottleneck is an inherent flaw in the xmpp tunnel design.
+                logging.debug('packet dropped')
+
+        elif msg.get_type=='error':
+            key = (msg['nick']['nick'],msg['from'].bare,msg['subject'])
+            if key in self.client_sockets:
+                #resend the message
+                self.sendMessageWrapper(msg['from'].bare, msg['nick']['nick'], msg['subject'], msg['body'], 'chat')
 
     def handle_read(self, local_address, peer, remote_address):
         """Called when a TCP socket has stuff to be read from it."""
