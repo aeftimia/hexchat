@@ -38,7 +38,7 @@ class hexchat_result(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'result'
     namespace = 'hexchat:result'
     plugin_attrib = 'result'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','response'))
     sub_interfaces=interfaces
 
 class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -133,7 +133,7 @@ class bot(sleekxmpp.ClientXMPP):
         #this is set to get_message and is used to filter data recieved over the chat server
         self.add_event_handler("session_start", self.session_start)
         self.add_event_handler("disconnected", self.disconnected)
-        self.add_event_handler("message@type=chat", self.message_handler)
+        self.add_event_handler("message", self.message_handler)
         
         #these handle the custom iq stanzas
         self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Connection Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=set/connect'),self.connect_handler))
@@ -180,7 +180,7 @@ class bot(sleekxmpp.ClientXMPP):
             return()
 
         if not key in self.client_sockets:
-            self.initiate_connection(*key, send_confirmation=False)
+            self.initiate_connection(*key)
         else:
             logging.warn("connection request recieved from a connected socket")   
 
@@ -194,7 +194,7 @@ class bot(sleekxmpp.ClientXMPP):
 
         key=(local_address, message['from'], remote_address)
         if not key in self.client_sockets:
-            self.initiate_connection(*key, send_confirmation=True)
+            self.initiate_connection(*key)
         else:
             logging.warn("connection request recieved from a connected socket")  
          
@@ -260,12 +260,19 @@ class bot(sleekxmpp.ClientXMPP):
         if not key in self.client_sockets:
             key0=(key[0], iq['from'].bare, key[2])
             if key0 in self.pending_connections:
-                logging.debug("%s:%d recieved resource of" % key[0] + " %s:%d" % key[2])
-                self.peer_resources[key0[1]]=iq['from']
-                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
-                self.initialize_client_socket(key)
+                logging.debug("%s:%d recieved connection result: "  % key[0] + iq['result']['response'] + " from %s:%d" % key[2])
+                if not key[1] in self.peer_resources:
+                    self.peer_resources[key0[1]]=iq['from']
+                if iq['result']['response']=="success":
+                    self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
+                    self.initialize_client_socket(key)
+                elif iq['result']['response']=="failure":
+                    self.pending_connections[key].close()
+                    del(self.pending_connections[key])
             else:
                 logging.warn("result recieved from invalid iq")
+        else:
+            logging.warn("result recieved at connected socket")
 
     def send_data(self, local_address, peer, remote_address, data):
         key = (local_address, peer, remote_address)
@@ -278,26 +285,28 @@ class bot(sleekxmpp.ClientXMPP):
         data_stanza=ElementTree.Element("data")
         data_stanza.text=data
         packet.append(data_stanza)
-        self.send_iq(packet)
+        self.send_iq(packet, peer, 'set')
 
     def send_connect(self, local_address, peer, remote_address):
         packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-        self.send_iq(packet)
+        self.send_iq(packet, peer, 'set')
 
     def send_disconnect(self, local_address, peer, remote_address):
         packet=format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
-        self.send_iq(packet)
-
+        self.send_iq(packet, peer, 'set')
         
-    def send_result(self, local_address, peer, remote_address):
+    def send_result(self, local_address, peer, remote_address, response):
         packet=format_header(local_address, remote_address, ElementTree.Element("result"))
         packet.attrib['xmlns']="hexchat:result"
+        response_stanza=ElementTree.Element("response")
+        response_stanza.text=response
+        packet.append(response_stanza)
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
-        self.send_iq(packet)
+        self.send_iq(packet, peer, 'result')
 
     def request_resource(self, local_address, peer, remote_address):
         message=self.Message()
@@ -311,17 +320,17 @@ class bot(sleekxmpp.ClientXMPP):
         message['subject']=str(remote_address[1])
         message.send()
 
-    def send_iq(self, packet):
+    def send_iq(self, packet, peer, iq_type):
         iq=self.Iq()
         iq['from']=self.boundjid
         iq['to']=peer
-        iq['type']='set'
+        iq['type']=iq_type
         iq.append(packet)
         iq.send(False)
 
     ### Methods for connection/socket creation.
 
-    def initiate_connection(self, local_address, peer, remote_address, send_confirmation):
+    def initiate_connection(self, local_address, peer, remote_address):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
         #construct identifier for client_sockets
         key=(local_address, peer, remote_address)
@@ -337,15 +346,14 @@ class bot(sleekxmpp.ClientXMPP):
             connected_socket=socket.create_connection(local_address)
         except (socket.error, OverflowError, ValueError):
             logging.warning("could not connect to %s:%d" % local_address)
-            #if it could not connect, tell the bot on the the other side to disconnect
-            self.send_disconnect(local_address, peer, remote_address)
+            #if it could not connect, tell the bot on the the other it could not connect
+            self.send_result(local_address, peer, remote_address, "failure")
             del(self.client_sockets[key])
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
-        if send_confirmation:
-            self.send_result(local_address,peer,remote_address)
+        self.send_result(local_address,peer,remote_address, "success")
         self.client_sockets[key].set_socket(connected_socket)
         self.client_sockets[key].connected = True
         self.initialize_client_socket(key)
@@ -387,15 +395,12 @@ class bot(sleekxmpp.ClientXMPP):
         #self.add_client_socket(local_address, peer, remote_address, connection)
         #send a connection request to the bot waiting on the other side of the xmpp server
         logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % remote_address)
+        self.pending_connections[(local_address, peer, remote_address)]=connection
         if peer in self.peer_resources:
-            logging.debug("found resource")
-            key=(local_address, self.peer_resources[peer], remote_address)
-            self.client_sockets[key] = asyncore.dispatcher(connection, map=self.map)
+            logging.debug("found resource, sending connection request via iq")
             self.send_connect(local_address, self.peer_resources[peer], remote_address)
-            self.initialize_client_socket(key)
         else:
             logging.debug("requesting resource")
-            self.pending_connections[(local_address, peer, remote_address)]=connection
             self.request_resource(local_address, peer, remote_address)
         
         
@@ -415,7 +420,7 @@ class bot(sleekxmpp.ClientXMPP):
         del(self.client_sockets[key])
 
 if __name__ == '__main__':
-    logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
+    logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
     
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_result)
