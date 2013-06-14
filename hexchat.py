@@ -267,8 +267,8 @@ class bot(sleekxmpp.ClientXMPP):
                     self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
                     self.initialize_client_socket(key)
                 elif iq['result']['response']=="failure":
-                    self.pending_connections[key].close()
-                    del(self.pending_connections[key])
+                    self.pending_connections[key0].close()
+                    del(self.pending_connections[key0])
             else:
                 logging.warn("result recieved from invalid iq")
         else:
@@ -276,10 +276,6 @@ class bot(sleekxmpp.ClientXMPP):
 
     def send_data(self, local_address, peer, remote_address, data):
         key = (local_address, peer, remote_address)
-
-        if not key in self.client_sockets:
-            return()
-
         packet=format_header(local_address, remote_address, ElementTree.Element("packet"))
         packet.attrib['xmlns']="hexchat:packet"
         data_stanza=ElementTree.Element("data")
@@ -332,15 +328,6 @@ class bot(sleekxmpp.ClientXMPP):
 
     def initiate_connection(self, local_address, peer, remote_address):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
-        #construct identifier for client_sockets
-        key=(local_address, peer, remote_address)
-        
-        #pretend socket is already connected in case data is recieved while connecting
-        self.client_sockets[key] = asyncore.dispatcher(map=self.map)
-        #temporary asyncore initialization stuff
-        #to prevent data from being written or read from the socket
-        self.client_sockets[key].writable=lambda: False
-        self.client_sockets[key].readable=lambda: False
         
         try: # connect to the ip:port
             connected_socket=socket.create_connection(local_address)
@@ -348,15 +335,14 @@ class bot(sleekxmpp.ClientXMPP):
             logging.warning("could not connect to %s:%d" % local_address)
             #if it could not connect, tell the bot on the the other it could not connect
             self.send_result(local_address, peer, remote_address, "failure")
-            del(self.client_sockets[key])
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
-        self.send_result(local_address,peer,remote_address, "success")
-        self.client_sockets[key].set_socket(connected_socket)
-        self.client_sockets[key].connected = True
+        key=(local_address, peer, remote_address)
+        self.client_sockets[key] = asyncore.dispatcher(sock=connected_socket, map=self.map)
         self.initialize_client_socket(key)
+        self.send_result(local_address,peer,remote_address, "success")
 
     def initialize_client_socket(self, key):
         #just some asyncore initialization stuff
@@ -407,9 +393,10 @@ class bot(sleekxmpp.ClientXMPP):
     def handle_close(self, key):
         """Called when the TCP client socket closes."""
         local_address, peer, remote_address = key
+
         if not key in self.client_sockets:
             return()
-            
+        
         #send a disconnection request to the bot waiting on the other side of the xmpp server
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.send_disconnect(local_address, peer, remote_address)
