@@ -20,6 +20,10 @@ if sys.version_info < (3, 0):
 else:
     raw_input = input
 
+#how many seconds before sending the next packet
+#to a given client
+THROTTLE_RATE=1.0
+
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
     namespace = 'hexchat:disconnect'
@@ -52,7 +56,7 @@ class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
 def iq_to_key(iq, iq_from):
-    if int(iq['remote_port'])>sys.maxsize or int(iq['local_port'])>sys.maxsize:
+    if len(iq['remote_port'])>len(str(sys.maxsize)) or len(iq['local_port'])>len(str(sys.maxsize)):
         #these ports are way too long
         raise(ValueError)
         
@@ -118,7 +122,7 @@ class bot(sleekxmpp.ClientXMPP):
 
         #peer's resources
         self.peer_resources={}
-        
+
         #initialize the sleekxmpp client.
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
 
@@ -143,7 +147,7 @@ class bot(sleekxmpp.ClientXMPP):
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
-        self.scheduler.add("asyncore loop", 0.01, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
+        self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.0, True, self.map, None), repeat=True)
 
         # Connect to XMPP server
         if self.connect(self.connect_address):
@@ -171,6 +175,8 @@ class bot(sleekxmpp.ClientXMPP):
             logging.debug("connection reestabilshed")
         else:
             raise(Exception(jid+" could not connect"))
+            
+    #incomming xml handlers
 
     def connect_handler(self, iq):
         try:
@@ -229,10 +235,12 @@ class bot(sleekxmpp.ClientXMPP):
             #in trying to pipe TCP data over a chat server
             #Furthermore, it would seem the only way to solve the problem
             #is with raw sockets
-            logging.warn("%s:%d recieved data from " % key[0] + "%s:%d, but is not connected." % key[2])
-            #as a side note, piping UDP over a chat server would
-            #not suffer from this flaw since UDP
-            #does not "connect" and "disconnect"
+            
+            #if there was no data, then it was probably
+            #just a blank packet sent during
+            #the disconnect process
+            if iq['packet']['data']:
+                logging.warn("%s:%d recieved data from " % key[0] + "%s:%d, but is not connected." % key[2])
             return()
 
         try:
@@ -250,7 +258,6 @@ class bot(sleekxmpp.ClientXMPP):
             data=data[self.client_sockets[key].send(data):]
            
     def result_handler(self, iq):
-        #confirmation of message delivery
         try:
             key=iq_to_key(iq['result'], iq['from'])
         except ValueError:
@@ -274,8 +281,10 @@ class bot(sleekxmpp.ClientXMPP):
         else:
             logging.warn("result recieved at connected socket")
 
-    def send_data(self, local_address, peer, remote_address, data):
-        key = (local_address, peer, remote_address)
+    #methods for sending xml
+
+    def send_data(self, key, data):
+        (local_address, peer, remote_address)=key
         packet=format_header(local_address, remote_address, ElementTree.Element("packet"))
         packet.attrib['xmlns']="hexchat:packet"
         data_stanza=ElementTree.Element("data")
@@ -340,17 +349,19 @@ class bot(sleekxmpp.ClientXMPP):
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
         key=(local_address, peer, remote_address)
-        self.client_sockets[key] = asyncore.dispatcher(sock=connected_socket, map=self.map)
+        self.client_sockets[key] = asyncore.dispatcher(connected_socket, map=self.map)
         self.initialize_client_socket(key)
         self.send_result(local_address,peer,remote_address, "success")
 
     def initialize_client_socket(self, key):
         #just some asyncore initialization stuff
-        (local_address, peer, remote_address) = key
+        self.client_sockets[key].buffer=b''
+        self.client_sockets[key].id=0
         self.client_sockets[key].writable=lambda: False
         self.client_sockets[key].readable=lambda: True
-        self.client_sockets[key].handle_read=lambda: self.handle_read(local_address, peer, remote_address)
+        self.client_sockets[key].handle_read=lambda: self.handle_read(key)
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
+        self.scheduler.add("check buffer %d" % hash(key), THROTTLE_RATE, lambda: self.check_buffer(key), (), repeat=True)
 
     def add_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
@@ -366,11 +377,9 @@ class bot(sleekxmpp.ClientXMPP):
         
     ### asyncore callbacks:
 
-    def handle_read(self, local_address, peer, remote_address):
+    def handle_read(self, key):
         """Called when a TCP socket has stuff to be read from it."""
-        
-        key = (local_address, peer, remote_address)
-        self.send_data(local_address, peer, remote_address, base64.b64encode(self.client_sockets[key].recv(8192)).decode("UTF-8"))
+        self.client_sockets[key].buffer+=self.client_sockets[key].recv(8192)
 
     def handle_accept(self, local_address, peer, remote_address):
         """Called when we have a new incoming connection to one of our listening sockets."""
@@ -392,19 +401,30 @@ class bot(sleekxmpp.ClientXMPP):
         
     def handle_close(self, key):
         """Called when the TCP client socket closes."""
-        local_address, peer, remote_address = key
-
         if not key in self.client_sockets:
             return()
-        
+            
+        local_address, peer, remote_address = key
         #send a disconnection request to the bot waiting on the other side of the xmpp server
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.send_disconnect(local_address, peer, remote_address)
         self.delete_socket(key)
 
     def delete_socket(self, key):
+        self.scheduler.remove("check buffer %d" % hash(key))
         self.client_sockets[key].close()
         del(self.client_sockets[key])
+
+    #check client sockets for buffered data
+    def check_buffer(self, key):
+        try:
+            data=self.client_sockets[key].buffer
+            data=data
+            if data:
+                self.send_data(key, base64.b64encode(data).decode("UTF-8"))
+                self.client_sockets[key].buffer=self.client_sockets[key].buffer[len(data):]
+        except KeyError:
+            pass
 
 if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
