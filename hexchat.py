@@ -8,6 +8,7 @@ import base64
 import time
 import threading
 import xml.etree.cElementTree as ElementTree
+import zlib
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -123,6 +124,8 @@ class bot(sleekxmpp.ClientXMPP):
         #peer's resources
         self.peer_resources={}
 
+        self.lock=threading.Lock()
+
         #initialize the sleekxmpp client.
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
 
@@ -147,14 +150,18 @@ class bot(sleekxmpp.ClientXMPP):
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
-        self.scheduler.add("asyncore loop", .001, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
+        self.scheduler.add("asyncore loop", .1, lambda: self.loop(), (), repeat=True)
 
         # Connect to XMPP server
         if self.connect(self.connect_address):
             self.process()
         else:
             raise(Exception(jid+" could not connect"))
-        
+
+    def loop(self):
+        self.lock.acquire()
+        threading.Thread(target=asyncore.loop(0.001, True, self.map, 1000)).start()
+        self.lock.release()        
 
     ### XMPP handling methods:
 
@@ -241,10 +248,13 @@ class bot(sleekxmpp.ClientXMPP):
             #the disconnect process
             if iq['packet']['data']:
                 logging.warn("%s:%d recieved data from " % key[0] + "%s:%d, but is not connected." % key[2])
+                #this could be because the disconnect signal was dropped by the chat server
+                #send a disconnect again
+                self.send_disconnect(*key)
             return()
 
         try:
-            data=base64.b64decode(iq['packet']['data'].encode("UTF-8"))
+            data=zlib.decompress(base64.b64decode(iq['packet']['data'].encode("UTF-8")))
         except (UnicodeDecodeError, TypeError, binascii.Error):
             logging.warn("%s:%d recieved invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
@@ -421,7 +431,7 @@ class bot(sleekxmpp.ClientXMPP):
             data=self.client_sockets[key].buffer
             data=data
             if data:
-                self.send_data(key, base64.b64encode(data).decode("UTF-8"))
+                self.send_data(key, base64.b64encode(zlib.compress(data, 9)).decode("UTF-8"))
                 self.client_sockets[key].buffer=self.client_sockets[key].buffer[len(data):]
         except KeyError:
             pass
