@@ -147,7 +147,7 @@ class bot(sleekxmpp.ClientXMPP):
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
-        self.scheduler.add("asyncore loop", 0.001, asyncore.loop, (0.0, True, self.map, None), repeat=True)
+        self.scheduler.add("asyncore loop", .001, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
 
         # Connect to XMPP server
         if self.connect(self.connect_address):
