@@ -24,7 +24,7 @@ else:
 #how many seconds before sending the next packet
 #to a given client
 THROTTLE_RATE=1.0
-ASYNCORE_LOOP_RATE=0.001
+ASYNCORE_LOOP_RATE=0.0001
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
