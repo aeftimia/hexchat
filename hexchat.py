@@ -23,10 +23,11 @@ else:
 
 #how many seconds before sending the next packet
 #to a given client
-THROTTLE_RATE=1.0
-ASYNCORE_LOOP_RATE=0.001
-RECV_RATE=2**13
-MAX_DATA=RECV_RATE*16
+THROUGHPUT=2**17 #bytes/second
+ASYNCORE_LOOP_RATE=0.01 #second
+MAX_DATA=2**17 #bytes
+THROTTLE_RATE=MAX_DATA//THROUGHPUT #seconds
+RECV_RATE=int(THROUGHPUT*ASYNCORE_LOOP_RATE) #bytes
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -148,6 +149,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Disconnection Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=set/disconnect'),self.disconnect_handler))
         self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Result Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=result/result'),self.result_handler))
         self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Data Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=set/packet'),self.data_handler))
+        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('IQ Error Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=error'),self.error_handler))
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
@@ -180,6 +182,9 @@ class bot(sleekxmpp.ClientXMPP):
             raise(Exception(jid+" could not connect"))
             
     #incomming xml handlers
+
+    def error_handler(self, iq):
+        pass
 
     def connect_handler(self, iq):
         try:
@@ -246,7 +251,7 @@ class bot(sleekxmpp.ClientXMPP):
                 raise(ValueError)
             self.send_result(key, iq['id'])
             id_diff=new_id-self.client_sockets[key].last_id_recieved
-            if abs(id_diff)>=self.client_sockets[key].peer_maxsize//2:
+            if id_diff<=0:
                 logging.debug("Recieved redundant message")
                 #acknowledge the data was recieved
                 logging.debug("%s:%d sending confirmation of id " % key[0] + "%s" % (iq['id']) + " to %s:%d" % key[2])
@@ -267,11 +272,11 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key].last_id_recieved=new_id
         
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
-        while data:
-            try:        
+        try:
+            while data:    
                 data=data[self.client_sockets[key].send(data):]
-            except KeyError:
-                return()
+        except KeyError:
+            return()
            
     def result_handler(self, iq):
         try:
@@ -305,7 +310,7 @@ class bot(sleekxmpp.ClientXMPP):
                     raise(ValueError)
                 cache_depth=len(self.client_sockets[key].cache_lengths)
                 num_caches_to_clear=cache_depth-((self.client_sockets[key].id-response_id) % sys.maxsize)
-                if num_caches_to_clear>0:
+                if num_caches_to_clear>0 and num_caches_to_clear<=cache_depth:
                     #data has been acknowledged
                     #clear the cache
                     logging.debug("clearing %d caches" % (num_caches_to_clear))
@@ -313,12 +318,10 @@ class bot(sleekxmpp.ClientXMPP):
                     self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_data_length:]
                     self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[num_caches_to_clear:]
                     self.client_sockets[key].cache_buffer_lengths=self.client_sockets[key].cache_buffer_lengths[num_caches_to_clear:]
-                elif num_caches_to_clear==0:
-                    logging.debug("confirmation of most recent sent message recieved")
                 else:
                     raise(ValueError)
             except ValueError:
-                logging.warn("result recieved from invalid id. Recieved response that would clear %d caches, but only cached %d packets." % (num_caches_to_clear, cache_depth))
+                logging.warn("result recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
 
     #methods for sending xml
 
