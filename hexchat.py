@@ -249,12 +249,10 @@ class bot(sleekxmpp.ClientXMPP):
             new_id=int(iq['id'])
             if new_id<0:
                 raise(ValueError)
-            self.send_result(key, iq['id'])
+                
             id_diff=new_id-self.client_sockets[key].last_id_recieved
-            if id_diff<=0:
+            if id_diff<=0 and id_diff>-sys.maxsize//2:
                 logging.debug("Recieved redundant message")
-                #acknowledge the data was recieved
-                logging.debug("%s:%d sending confirmation of id " % key[0] + "%s" % (iq['id']) + " to %s:%d" % key[2])
                 return()
             num_new_messages= id_diff % self.client_sockets[key].peer_maxsize
             #total up the length of each cache sent in the message that we already recieved
@@ -272,6 +270,9 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key].last_id_recieved=new_id
         
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
+        #acknowledge the data was recieved
+        logging.debug("%s:%d sending confirmation of id " % key[0] + "%s" % (iq['id']) + " to %s:%d" % key[2])
+        self.send_result(key, iq['id'])
         try:
             while data:    
                 data=data[self.client_sockets[key].send(data):]
