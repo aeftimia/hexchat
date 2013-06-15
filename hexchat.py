@@ -23,7 +23,9 @@ else:
 
 #how many seconds before sending the next packet
 #to a given client
-THROTTLE_RATE=1.0
+THROTTLE_RATE=.1
+ASYNCORE_LOOP_RATE=0.001
+ASYNCORE_THREAD_RATE=0.01
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -124,8 +126,6 @@ class bot(sleekxmpp.ClientXMPP):
         #peer's resources
         self.peer_resources={}
 
-        self.lock=threading.Lock()
-
         #initialize the sleekxmpp client.
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
 
@@ -150,18 +150,13 @@ class bot(sleekxmpp.ClientXMPP):
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
-        self.scheduler.add("asyncore loop", .1, lambda: self.loop(), (), repeat=True)
+        self.scheduler.add("asyncore loop", ASYNCORE_THREAD_RATE, asyncore.loop, (ASYNCORE_LOOP_RATE, True, self.map, int(ASYNCORE_THREAD_RATE/ASYNCORE_LOOP_RATE)), repeat=True)
 
         # Connect to XMPP server
         if self.connect(self.connect_address):
             self.process()
         else:
-            raise(Exception(jid+" could not connect"))
-
-    def loop(self):
-        self.lock.acquire()
-        threading.Thread(target=asyncore.loop(0.001, True, self.map, 1000)).start()
-        self.lock.release()        
+            raise(Exception(jid+" could not connect"))       
 
     ### XMPP handling methods:
 
