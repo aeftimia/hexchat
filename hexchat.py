@@ -9,6 +9,8 @@ import time
 import threading
 import xml.etree.cElementTree as ElementTree
 import zlib
+import operator
+import functools
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -244,7 +246,7 @@ class bot(sleekxmpp.ClientXMPP):
                 logging.warn("%s:%d recieved data from " % key[0] + "%s:%d, but is not connected." % key[2])
                 #this could be because the disconnect signal was dropped by the chat server
                 #send a disconnect again
-                self.send_disconnect(*key)
+                self.send_disconnect(key)
             return()
 
         try:
@@ -260,6 +262,10 @@ class bot(sleekxmpp.ClientXMPP):
 
         while data:        
             data=data[self.client_sockets[key].send(data):]
+
+        #acknowledge the data was recieved
+        logging.debug("%s:%d sending confirmation of id " % key[0] + "%s" % (iq['id']) + " to %s:%d" % key[2])
+        self.send_result(key, iq['id'])
            
     def result_handler(self, iq):
         try:
@@ -280,43 +286,56 @@ class bot(sleekxmpp.ClientXMPP):
                 elif iq['result']['response']=="failure":
                     self.pending_connections[key0].close()
                     del(self.pending_connections[key0])
-            else:
-                logging.warn("result recieved from invalid iq")
         else:
-            logging.warn("result recieved at connected socket")
+            try:
+                id_diff=(self.client_sockets[key].id-int(iq['result']['response'])) % sys.maxsize
+                if id_diff<=len(self.client_sockets[key].cache_lengths):
+                    #data has been acknowledged
+                    #clear the cache
+                    logging.debug("clearing cache")
+                    cache_length=functools.reduce(operator.add, self.client_sockets[key].cache_lengths[:id_diff], 0)
+                    self.client_sockets[key].cache_data=client_sockets[key].cache_data[cache_length:]
+                    self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[id_diff:]
+                else:
+                    raise(ValueError)
+            except ValueError:
+                logging.warn("result recieved from invalid id. Recieved %s, looking for %d" % (iq['result']['response'], self.client_sockets[key].id))
 
     #methods for sending xml
 
     def send_data(self, key, data):
-        (local_address, peer, remote_address)=key
+        (local_address, remote_address)=(key[0], key[2])
         packet=format_header(local_address, remote_address, ElementTree.Element("packet"))
         packet.attrib['xmlns']="hexchat:packet"
         data_stanza=ElementTree.Element("data")
         data_stanza.text=data
         packet.append(data_stanza)
-        self.send_iq(packet, peer, 'set')
+        self.send_iq(packet, key, 'set')
 
-    def send_connect(self, local_address, peer, remote_address):
+    def send_connect(self, key):
+        (local_address, remote_address)=(key[0], key[2])
         packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-        self.send_iq(packet, peer, 'set')
+        self.send_iq(packet, key, 'set')
 
-    def send_disconnect(self, local_address, peer, remote_address):
+    def send_disconnect(self, key):
+        (local_address, remote_address)=(key[0], key[2])
         packet=format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
-        self.send_iq(packet, peer, 'set')
+        self.send_iq(packet, key, 'set')
         
-    def send_result(self, local_address, peer, remote_address, response):
+    def send_result(self, key, response):
+        (local_address, remote_address)=(key[0], key[2])
         packet=format_header(local_address, remote_address, ElementTree.Element("result"))
         packet.attrib['xmlns']="hexchat:result"
         response_stanza=ElementTree.Element("response")
         response_stanza.text=response
         packet.append(response_stanza)
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
-        self.send_iq(packet, peer, 'result')
-
+        self.send_iq(packet, key, 'result')
+        
     def request_resource(self, local_address, peer, remote_address):
         message=self.Message()
         message['to']=peer
@@ -329,11 +348,13 @@ class bot(sleekxmpp.ClientXMPP):
         message['subject']=str(remote_address[1])
         message.send()
 
-    def send_iq(self, packet, peer, iq_type):
+    def send_iq(self, packet, key, iq_type):
         iq=self.Iq()
         iq['from']=self.boundjid
-        iq['to']=peer
+        iq['to']=key[1]
         iq['type']=iq_type
+        if key in self.client_sockets:
+            iq['id']=str(self.client_sockets[key].id)
         iq.append(packet)
         iq.send(False)
 
@@ -342,25 +363,27 @@ class bot(sleekxmpp.ClientXMPP):
     def initiate_connection(self, local_address, peer, remote_address):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
         
+        key=(local_address, peer, remote_address)
         try: # connect to the ip:port
             connected_socket=socket.create_connection(local_address)
         except (socket.error, OverflowError, ValueError):
             logging.warning("could not connect to %s:%d" % local_address)
             #if it could not connect, tell the bot on the the other it could not connect
-            self.send_result(local_address, peer, remote_address, "failure")
+            self.send_result(key, "failure")
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
-        key=(local_address, peer, remote_address)
         self.client_sockets[key] = asyncore.dispatcher(connected_socket, map=self.map)
         self.initialize_client_socket(key)
-        self.send_result(local_address,peer,remote_address, "success")
+        self.send_result(key, "success")
 
     def initialize_client_socket(self, key):
         #just some asyncore initialization stuff
         self.client_sockets[key].buffer=b''
         self.client_sockets[key].id=0
+        self.client_sockets[key].cache_lengths=[]
+        self.client_sockets[key].cache_data=b''
         self.client_sockets[key].writable=lambda: False
         self.client_sockets[key].readable=lambda: True
         self.client_sockets[key].handle_read=lambda: self.handle_read(key)
@@ -397,7 +420,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.pending_connections[(local_address, peer, remote_address)]=connection
         if peer in self.peer_resources:
             logging.debug("found resource, sending connection request via iq")
-            self.send_connect(local_address, self.peer_resources[peer], remote_address)
+            self.send_connect((local_address, self.peer_resources[peer], remote_address))
         else:
             logging.debug("requesting resource")
             self.request_resource(local_address, peer, remote_address)
@@ -408,10 +431,10 @@ class bot(sleekxmpp.ClientXMPP):
         if not key in self.client_sockets:
             return()
             
-        local_address, peer, remote_address = key
         #send a disconnection request to the bot waiting on the other side of the xmpp server
+        (local_address, remote_address)=(key[0], key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.send_disconnect(local_address, peer, remote_address)
+        self.send_disconnect(key)
         self.delete_socket(key)
 
     def delete_socket(self, key):
@@ -422,11 +445,13 @@ class bot(sleekxmpp.ClientXMPP):
     #check client sockets for buffered data
     def check_buffer(self, key):
         try:
-            data=self.client_sockets[key].buffer
-            data=data
-            if data:
-                self.send_data(key, base64.b64encode(zlib.compress(data, 9)).decode("UTF-8"))
+            if self.client_sockets[key].buffer or self.client_sockets[key].cache_data:
+                data=self.client_sockets[key].buffer
+                self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+                self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data+data, 9)).decode("UTF-8"))
                 self.client_sockets[key].buffer=self.client_sockets[key].buffer[len(data):]
+                self.client_sockets[key].cache_data+=data
+                self.client_sockets[key].cache_lengths.append(len(data))
         except KeyError:
             pass
 
