@@ -24,7 +24,9 @@ else:
 #how many seconds before sending the next packet
 #to a given client
 THROTTLE_RATE=1.0
-ASYNCORE_LOOP_RATE=0.01
+ASYNCORE_LOOP_RATE=0.001
+RECV_RATE=2**13
+MAX_DATA=RECV_RATE*16
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -281,7 +283,7 @@ class bot(sleekxmpp.ClientXMPP):
         if not key in self.client_sockets:
             key0=(key[0], iq['from'].bare, key[2])
             if key0 in self.pending_connections:
-                logging.debug("%s:%d recieved connection result: "  % key[0] + iq['result']['response'] + " from %s:%d" % key[2])
+                logging.debug("%s:%d recieved connection result: " % key[0] + iq['result']['response'] + " from %s:%d" % key[2])
                 if not key[1] in self.peer_resources:
                     self.peer_resources[key0[1]]=iq['from']
                 if iq['result']['response']=="failure":
@@ -310,10 +312,13 @@ class bot(sleekxmpp.ClientXMPP):
                     cache_data_length=sum(self.client_sockets[key].cache_lengths[:num_caches_to_clear])
                     self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_data_length:]
                     self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[num_caches_to_clear:]
+                    self.client_sockets[key].cache_buffer_lengths=self.client_sockets[key].cache_buffer_lengths[num_caches_to_clear:]
+                elif num_caches_to_clear==0:
+                    logging.debug("confirmation of most recent sent message recieved")
                 else:
                     raise(ValueError)
             except ValueError:
-                logging.warn("result recieved from invalid id. Recieved response that would clear caches, but only cached %d packets." % (num_caches_to_clear, cache_depth))
+                logging.warn("result recieved from invalid id. Recieved response that would clear %d caches, but only cached %d packets." % (num_caches_to_clear, cache_depth))
 
     #methods for sending xml
 
@@ -408,13 +413,15 @@ class bot(sleekxmpp.ClientXMPP):
     def initialize_client_socket(self, key):
         #just some asyncore initialization stuff
         self.client_sockets[key].buffer=b''
+        self.client_sockets[key].buffer_lengths=[]
         self.client_sockets[key].id=0
         self.client_sockets[key].last_id_recieved=0
         self.client_sockets[key].cache_lengths=[]
+        self.client_sockets[key].cache_buffer_lengths=[]
         self.client_sockets[key].cache_data=b''
         self.client_sockets[key].writable=lambda: False
-        self.client_sockets[key].readable=lambda: True
         self.client_sockets[key].handle_read=lambda: self.handle_read(key)
+        self.client_sockets[key].readable=lambda: True
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
         self.scheduler.add("check buffer %d" % hash(key), THROTTLE_RATE, lambda: self.check_buffer(key), (), repeat=True)
 
@@ -434,7 +441,12 @@ class bot(sleekxmpp.ClientXMPP):
 
     def handle_read(self, key):
         """Called when a TCP socket has stuff to be read from it."""
-        self.client_sockets[key].buffer+=self.client_sockets[key].recv(1024)
+        try:
+            data=self.client_sockets[key].recv(RECV_RATE)
+            self.client_sockets[key].buffer+=data
+            self.client_sockets[key].buffer_lengths.append(len(data))
+        except KeyError: #socket got deleted while writing to the buffer
+            pass
 
     def handle_accept(self, local_address, peer, remote_address):
         """Called when we have a new incoming connection to one of our listening sockets."""
@@ -475,12 +487,27 @@ class bot(sleekxmpp.ClientXMPP):
         try:
             if self.client_sockets[key].buffer or self.client_sockets[key].cache_data:
                 data=self.client_sockets[key].buffer
+                self.client_sockets[key].buffer=b''
+                buffer_lengths=self.client_sockets[key].buffer_lengths
+                self.client_sockets[key].buffer_lengths=[]
                 if data:
+                    self.client_sockets[key].cache_buffer_lengths.append(buffer_lengths)
                     self.client_sockets[key].cache_lengths.append(len(data))
+                    self.client_sockets[key].cache_data+=data
+                    while len(self.client_sockets[key].cache_data)>MAX_DATA:
+                        logging.debug("garbage collecting cache")
+                        num_garbage_bytes=self.client_sockets[key].cache_buffer_lengths[0][0]
+                        self.client_sockets[key].cache_buffer_lengths[0]=self.client_sockets[key].cache_buffer_lengths[0][1:]
+                        if not self.client_sockets[key].cache_buffer_lengths[0]:
+                            self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[1:]
+                            self.client_sockets[key].cache_buffer_lengths=self.client_sockets[key].cache_buffer_lengths[1:]
+                        else:
+                            self.client_sockets[key].cache_lengths[0]-=num_garbage_bytes
+                        self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]
+                        
                     self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
-                self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data+data, 9)).decode("UTF-8"))
-                self.client_sockets[key].buffer=self.client_sockets[key].buffer[len(data):]
-                self.client_sockets[key].cache_data+=data
+                        
+                self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data, 9)).decode("UTF-8"))
         except KeyError:
             pass
 
