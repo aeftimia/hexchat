@@ -260,8 +260,11 @@ class bot(sleekxmpp.ClientXMPP):
 
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2] + ":%s" % (iq['packet']['data']))
 
-        while data:        
-            data=data[self.client_sockets[key].send(data):]
+        while data:
+            try:        
+                data=data[self.client_sockets[key].send(data):]
+            except KeyError:
+                return()
 
         #acknowledge the data was recieved
         logging.debug("%s:%d sending confirmation of id " % key[0] + "%s" % (iq['id']) + " to %s:%d" % key[2])
@@ -294,7 +297,7 @@ class bot(sleekxmpp.ClientXMPP):
                     #clear the cache
                     logging.debug("clearing cache")
                     cache_length=functools.reduce(operator.add, self.client_sockets[key].cache_lengths[:id_diff], 0)
-                    self.client_sockets[key].cache_data=client_sockets[key].cache_data[cache_length:]
+                    self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_length:]
                     self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[id_diff:]
                 else:
                     raise(ValueError)
