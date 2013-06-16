@@ -24,8 +24,9 @@ else:
 
 #how many seconds before sending the next packet
 #to a given client
-MAX_DATA=2**20 #bytes
-THROTTLE_RATE=1.0 #seconds
+MAX_DATA=2**22 #bytes
+MIN_THROTTLE_RATE=1.0 #seconds
+MAX_THROTTLE_RATE=3.0 #seconds
 ASYNCORE_LOOP_RATE=.001 #seconds
 RECV_RATE=int(MAX_DATA*ASYNCORE_LOOP_RATE) #bytes
 TIMEOUT=300.0 #seconds
@@ -130,7 +131,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.peer_resources={}
 
         #rate at which to send data over the chat server
-        self.avg_throttle_rate=THROTTLE_RATE
+        self.avg_throttle_rate=MIN_THROTTLE_RATE
 
         #rate at which socket reads data
         self.avg_recv_rate=RECV_RATE
@@ -314,8 +315,7 @@ class bot(sleekxmpp.ClientXMPP):
             key0=(key[0], iq['from'].bare, key[2])
             if key0 in self.pending_connections:
                 logging.debug("%s:%d recieved connection result: " % key[0] + iq['result']['response'] + " from %s:%d" % key[2])
-                if not key[1] in self.peer_resources:
-                    self.peer_resources[key0[1]]=iq['from']
+                self.peer_resources[key0[1]]=iq['from']
                 if iq['result']['response']=="failure":
                     self.pending_connections[key0].close()
                     del(self.pending_connections[key0])
@@ -350,7 +350,9 @@ class bot(sleekxmpp.ClientXMPP):
                 except ValueError:
                     pass
                 #adjust throttle rate
-                self.client_sockets[key].throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
+                new_throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
+                rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
+                self.client_sockets[key].throttle_rate=rescaled_throttle_rate
                 logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
                 self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
                 #data has been acknowledged
