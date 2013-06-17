@@ -24,12 +24,12 @@ else:
 
 #how many seconds before sending the next packet
 #to a given client
-MAX_DATA=2**22 #bytes
+MAX_DATA=2**18 #bytes
 MIN_THROTTLE_RATE=1.0 #seconds
 MAX_THROTTLE_RATE=3.0 #seconds
-ASYNCORE_LOOP_RATE=.001 #seconds
-RECV_RATE=int(MAX_DATA*ASYNCORE_LOOP_RATE) #bytes
-TIMEOUT=300.0 #seconds
+ASYNCORE_LOOP_RATE=.1 #seconds
+RECV_RATE=int(MAX_DATA*ASYNCORE_LOOP_RATE/((MIN_THROTTLE_RATE+MAX_THROTTLE_RATE)/2.)) #bytes
+TIMEOUT=120.0 #seconds
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -133,9 +133,6 @@ class bot(sleekxmpp.ClientXMPP):
         #rate at which to send data over the chat server
         self.avg_throttle_rate=MIN_THROTTLE_RATE
 
-        #rate at which socket reads data
-        self.avg_recv_rate=RECV_RATE
-
         #initialize the sleekxmpp client.
         sleekxmpp.ClientXMPP.__init__(self, jid, password)
 
@@ -172,18 +169,15 @@ class bot(sleekxmpp.ClientXMPP):
     def calculate_avg_rates(self):
         num_sockets=0
         throttle_rate=0
-        recv_rate=0
         client_sockets=self.client_sockets.copy()
         for key, client_socket in client_sockets.items():
-            if hasattr(client_socket, "throttle_rate") and hasattr(client_socket, "recv_rate"):
+            if hasattr(client_socket, "throttle_rate"):
                 throttle_rate+=client_socket.throttle_rate
-                recv_rate+=client_socket.recv_rate
                 num_sockets+=1
         if num_sockets>0:
             self.avg_throttle_rate=float(throttle_rate)/num_sockets
-            self.avg_recv_rate=int(float(recv_rate)/num_sockets)
 
-        return((self.avg_recv_rate, self.avg_throttle_rate))
+        return(self.avg_throttle_rate)
 
     ### XMPP handling methods:
 
@@ -277,8 +271,6 @@ class bot(sleekxmpp.ClientXMPP):
             id_diff=new_id-self.client_sockets[key].last_id_recieved
             if id_diff<=0 and id_diff>-sys.maxsize/2.:
                 logging.debug("Recieved redundant message")
-                #resend confirmation of the last one
-                self.send_result(key, str(self.client_sockets[key].last_id_recieved))
                 return()
             num_new_messages= id_diff % self.client_sockets[key].peer_maxsize
             #total up the length of each cache sent in the message that we already recieved
@@ -297,8 +289,8 @@ class bot(sleekxmpp.ClientXMPP):
         
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
         #acknowledge the data was recieved
-        logging.debug("%s:%d sending confirmation of id " % key[0] + "%s" % (iq['id']) + " to %s:%d" % key[2])
-        self.send_result(key, iq['id'])
+        logging.debug("%s:%d adding id " % key[0] + "%s" % (iq['id']) + " to result buffer")
+        self.client_sockets[key].result_buffer=iq['id']
         try:
             while data:    
                 data=data[self.client_sockets[key].send(data):]
@@ -354,6 +346,9 @@ class bot(sleekxmpp.ClientXMPP):
                 rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
                 self.client_sockets[key].throttle_rate=rescaled_throttle_rate
                 logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
+                self.client_sockets[key].recv_rate=int(MAX_DATA*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+                logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
+                
                 self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
                 #data has been acknowledged
                 #clear the cache
@@ -435,7 +430,7 @@ class bot(sleekxmpp.ClientXMPP):
         if key in self.client_sockets:
             iq['id']=str(self.client_sockets[key].id)
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
 
     ### Methods for connection/socket creation.
 
@@ -462,6 +457,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key].buffer=b''
         self.client_sockets[key].buffer_lengths=[]
         self.client_sockets[key].id=0
+        self.client_sockets[key].result_buffer=None
         self.client_sockets[key].last_id_recieved=0
         self.client_sockets[key].cache_time=[]
         self.client_sockets[key].cache_lengths=[]
@@ -471,8 +467,10 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key].handle_read=lambda: self.handle_read(key)
         self.client_sockets[key].readable=lambda: True
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
-        (self.client_sockets[key].recv_rate, self.client_sockets[key].throttle_rate)=self.calculate_avg_rates()
-        self.scheduler.add("check buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_buffer(key), (), repeat=True)
+        self.client_sockets[key].throttle_rate=self.calculate_avg_rates()
+        self.client_sockets[key].recv_rate=int(MAX_DATA*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+        self.scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key), (), repeat=True)
+        self.scheduler.add("check result buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_result_buffer(key), (), repeat=True)
 
     def add_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
@@ -532,14 +530,18 @@ class bot(sleekxmpp.ClientXMPP):
         except ValueError:
             pass
         try:
-            self.scheduler.remove("check buffer %d" % (hash(key)))
+            self.scheduler.remove("check data buffer %d" % (hash(key)))
+        except ValueError:
+            pass
+        try:
+            self.scheduler.remove("check result buffer %d" % (hash(key)))
         except ValueError:
             pass
         self.client_sockets[key].close()
         del(self.client_sockets[key])
 
     #check client sockets for buffered data
-    def check_buffer(self, key):
+    def check_data_buffer(self, key):
         try:
             if self.client_sockets[key].buffer or self.client_sockets[key].cache_data:
                 data=self.client_sockets[key].buffer
@@ -561,16 +563,7 @@ class bot(sleekxmpp.ClientXMPP):
                             self.client_sockets[key].cache_buffer_lengths=self.client_sockets[key].cache_buffer_lengths[1:]
                         else:
                             self.client_sockets[key].cache_lengths[0]-=num_garbage_bytes
-                        self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]
-                        
-                    #readjust throttle rate based on the amount of data lost
-                    if len(self.client_sockets[key].cache_data)!=initial_cache_length:
-                        self.client_sockets[key].recv_rate*=len(self.client_sockets[key].cache_data)/initial_cache_length
-                        self.client_sockets[key].recv_rate=int(self.client_sockets[key].recv_rate)
-                        logging.debug("recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
-                    else:
-                        self.client_sockets[key].recv_rate=int((self.client_sockets[key].recv_rate+MAX_DATA*ASYNCORE_LOOP_RATE)/2.)
-                        logging.debug("recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))                         
+                        self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]                         
                         
                     self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
                         
@@ -580,6 +573,15 @@ class bot(sleekxmpp.ClientXMPP):
                     self.scheduler.add("timeout %d" % (hash(key)), TIMEOUT, lambda: self.handle_close(key), ())
                 except ValueError:
                     pass
+        except KeyError:
+            pass
+            
+    #check client sockets for buffered result
+    def check_result_buffer(self, key):
+        try:
+            if self.client_sockets[key].result_buffer!=None:
+                self.send_result(key, self.client_sockets[key].result_buffer)
+                self.client_sockets[key].result_buffer=None
         except KeyError:
             pass
 
