@@ -24,12 +24,13 @@ else:
 
 #how many seconds before sending the next packet
 #to a given client
-MAX_DATA=2**18 #bytes
+NUM_CACHES=4
+MAX_DATA=2**17 #bytes
 MIN_THROTTLE_RATE=1.0 #seconds
 MAX_THROTTLE_RATE=3.0 #seconds
-ASYNCORE_LOOP_RATE=.1 #seconds
-RECV_RATE=int(MAX_DATA*ASYNCORE_LOOP_RATE/((MIN_THROTTLE_RATE+MAX_THROTTLE_RATE)/2.)) #bytes
-TIMEOUT=120.0 #seconds
+ASYNCORE_LOOP_RATE=.25 #seconds
+RECV_RATE=int((MAX_DATA/float(NUM_CACHES))*ASYNCORE_LOOP_RATE/((MIN_THROTTLE_RATE+MAX_THROTTLE_RATE)/2.)) #bytes
+TIMEOUT=MAX_THROTTLE_RATE*NUM_CACHES*2.0 #seconds
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -346,7 +347,7 @@ class bot(sleekxmpp.ClientXMPP):
                 rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
                 self.client_sockets[key].throttle_rate=rescaled_throttle_rate
                 logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
-                self.client_sockets[key].recv_rate=int(MAX_DATA*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+                self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
                 logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
                 
                 self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
@@ -430,7 +431,7 @@ class bot(sleekxmpp.ClientXMPP):
         if key in self.client_sockets:
             iq['id']=str(self.client_sockets[key].id)
         iq.append(packet)
-        iq.send(False, now=True)
+        iq.send(False)
 
     ### Methods for connection/socket creation.
 
@@ -468,7 +469,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key].readable=lambda: True
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
         self.client_sockets[key].throttle_rate=self.calculate_avg_rates()
-        self.client_sockets[key].recv_rate=int(MAX_DATA*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+        self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
         self.scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key), (), repeat=True)
         self.scheduler.add("check result buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_result_buffer(key), (), repeat=True)
 
