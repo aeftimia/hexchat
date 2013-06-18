@@ -29,7 +29,7 @@ else:
 NUM_CACHES=4
 MAX_DATA=2**17 #bytes
 MIN_THROTTLE_RATE=1.0 #seconds
-MAX_THROTTLE_RATE=2.0 #seconds
+MAX_THROTTLE_RATE=3.0 #seconds
 ASYNCORE_LOOP_RATE=.1 #seconds
 RECV_RATE=int((MAX_DATA/float(NUM_CACHES))*ASYNCORE_LOOP_RATE/((MIN_THROTTLE_RATE+MAX_THROTTLE_RATE)/2.)) #bytes
 TIMEOUT=MAX_THROTTLE_RATE*NUM_CACHES*2.0 #seconds #not implemented
@@ -632,11 +632,12 @@ class master():
                         logging.debug("garbage collecting cache")
                         num_garbage_bytes=len(self.client_sockets[key].cache_data)-MAX_DATA
                         if num_garbage_bytes>=self.client_sockets[key].cache_lengths[0]:
+                            self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[self.client_sockets[key].cache_lengths[0]:]
                             self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[1:]
                             self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[1:]
                         else:
                             self.client_sockets[key].cache_lengths[0]-=num_garbage_bytes
-                        self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]                         
+                            self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]                         
                         
                     self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
                         
