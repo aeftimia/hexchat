@@ -625,9 +625,9 @@ class master():
                             self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]                         
                         
                     self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+                    self.client_sockets[key].cache_time.append(time.time())
                         
                 self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data, 9)).decode("UTF-8"))
-                self.client_sockets[key].cache_time.append(time.time())
         except KeyError:
             pass
 
