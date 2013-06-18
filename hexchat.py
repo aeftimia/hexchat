@@ -171,9 +171,6 @@ class master():
         # and 'xmpp_socket' is a sleekxmpp socket that speaks to the XMPP bot on the other side.
         self.client_sockets={}
 
-        #map is an opaque "socket map" used by asyncore
-        self.map = {}
-
         #pending connections
         self.pending_connections={}
 
@@ -189,18 +186,6 @@ class master():
         self.avg_throttle_rate=MIN_THROTTLE_RATE/float(len(self.bots))
 
         self.bot_index=0
-        #The scheduler is xmpp's multithreaded todo list
-        #This line adds asyncore's loop to the todo list
-        #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
-        if len(self.bots)>1:
-            self.bots[0].scheduler.add("asyncore loop 0", 0.0, lambda: self.asyncore_loop(0))
-        else:
-            self.bots[0].scheduler.add("asyncore loop 0", ASYNCORE_LOOP_RATE, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
-
-    def asyncore_loop(self, index):
-        asyncore.loop(0.0, True, self.map, 1)
-        index=(index+1)%len(self.bots)
-        self.bots[index].scheduler.add("asyncore loop %d" % index, ASYNCORE_LOOP_RATE, lambda: self.asyncore_loop(index))
         
     def calculate_avg_rates(self):
         num_sockets=0
@@ -371,7 +356,7 @@ class master():
                 except ValueError:
                     logging.warn("bad result recieved")
                     return()
-                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
+                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0))
                 self.client_sockets[key].peer_maxsize=peer_maxsize
                 self.client_sockets[key].aliases=iq['connect_ack']['aliases'].split(',')
                 self.initialize_client_socket(key)
@@ -409,7 +394,7 @@ class master():
             #    pass
             #adjust throttle rate
             new_throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
-            rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
+            rescaled_throttle_rate=(MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2.*len(self.bots)/(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi)/float(len(self.bots))
             self.client_sockets[key].throttle_rate=rescaled_throttle_rate
             logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
             self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
@@ -535,7 +520,7 @@ class master():
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
-        self.client_sockets[key] = asyncore.dispatcher(connected_socket, map=self.map)
+        self.client_sockets[key] = asyncore.dispatcher(connected_socket)
         self.client_sockets[key].aliases=list(key[1])
         self.initialize_client_socket(key)
         self.send_connect_ack(key, str(sys.maxsize))
@@ -560,7 +545,7 @@ class master():
     def add_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
         self.bot_index=(self.bot_index+1)%len(self.bots)
-        self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
+        self.server_sockets[local_address] = asyncore.dispatcher()
         #just some asyncore initialization stuff
         self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sockets[local_address].writable=lambda: False
@@ -698,4 +683,4 @@ if __name__ == '__main__':
 
     #program needs to be kept running on linux
     while True:
-        time.sleep(1)
+        asyncore.loop(ASYNCORE_LOOP_RATE, True)
