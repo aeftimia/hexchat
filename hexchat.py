@@ -411,7 +411,12 @@ class master():
             logging.debug("result recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
             #adjust throttle rate to maximum time span recorded
             if cache_depth>0:
-                self.client_sockets[key].throttle_rate=time.time()-self.client_sockets[key].cache_time[-1]
+                new_throttle_rate=time.time()-self.client_sockets[key].cache_time[-1]
+                rescaled_throttle_rate=(MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2.*len(self.bots)/(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi)/float(len(self.bots))
+                self.client_sockets[key].throttle_rate=rescaled_throttle_rate
+                logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
+                self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+                logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
 
     #methods for sending xml
 
