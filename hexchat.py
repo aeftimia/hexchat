@@ -10,6 +10,8 @@ import threading
 import xml.etree.cElementTree as ElementTree
 import zlib
 import math
+import sleekxmpp.xmlstream.handler.callback as callback
+import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -27,43 +29,50 @@ else:
 NUM_CACHES=4
 MAX_DATA=2**17 #bytes
 MIN_THROTTLE_RATE=1.0 #seconds
-MAX_THROTTLE_RATE=3.0 #seconds
-ASYNCORE_LOOP_RATE=.25 #seconds
+MAX_THROTTLE_RATE=2.0 #seconds
+ASYNCORE_LOOP_RATE=.1 #seconds
 RECV_RATE=int((MAX_DATA/float(NUM_CACHES))*ASYNCORE_LOOP_RATE/((MIN_THROTTLE_RATE+MAX_THROTTLE_RATE)/2.)) #bytes
-TIMEOUT=MAX_THROTTLE_RATE*NUM_CACHES*2.0 #seconds
+TIMEOUT=MAX_THROTTLE_RATE*NUM_CACHES*2.0 #seconds #not implemented
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
     namespace = 'hexchat:disconnect'
     plugin_attrib = 'disconnect'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port', 'aliases'))
     sub_interfaces=interfaces
 
 class hexchat_connect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'connect'
     namespace = 'hexchat:connect'
     plugin_attrib = 'connect'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','maxsize'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','maxsize'))
+    sub_interfaces=interfaces
+
+class hexchat_connect_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
+    name = 'connect_ack'
+    namespace = 'hexchat:connect_ack'
+    plugin_attrib = 'connect_ack'
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','response'))
     sub_interfaces=interfaces
     
 class hexchat_result(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'result'
     namespace = 'hexchat:result'
     plugin_attrib = 'result'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','response'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','response'))
     sub_interfaces=interfaces
 
 class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'packet'
     namespace = 'hexchat:packet'
     plugin_attrib = 'packet'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','data', 'chunks'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','data', 'chunks'))
     sub_interfaces=interfaces
 
 #construct key from iq
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
-def iq_to_key(iq, iq_from):
+def iq_to_key(iq):
     if len(iq['remote_port'])>len(str(sys.maxsize)) or len(iq['local_port'])>len(str(sys.maxsize)):
         #these ports are way too long
         raise(ValueError)
@@ -76,40 +85,80 @@ def iq_to_key(iq, iq_from):
 
     local_address=(local_ip, local_port)
     remote_address=(remote_ip,remote_port)
+
+    aliases=frozenset(iq['aliases'].split(','))
     
-    key=(local_address, iq_from, remote_address)
+    key=(local_address, aliases, remote_address)
     
     return(key)
 
-#turn local address and remote address into xml stanzas in the given element tree
-def format_header(local_address, remote_address, xml):       
-        local_ip_stanza=ElementTree.Element("local_ip")
-        local_ip_stanza.text=local_address[0]
-        xml.append(local_ip_stanza)      
-              
-        local_port_stanza=ElementTree.Element("local_port")
-        local_port_stanza.text=str(local_address[1])
-        xml.append(local_port_stanza)
-        
-        remote_ip_stanza=ElementTree.Element("remote_ip")
-        remote_ip_stanza.text=local_address[0]
-        xml.append(remote_ip_stanza)
-
-        remote_port_stanza=ElementTree.Element("remote_port")
-        remote_port_stanza.text=str(remote_address[1])
-        xml.append(remote_port_stanza)
-
-        return(xml)
-    
-"""this class exchanges data between tcp sockets and xmpp servers."""
 class bot(sleekxmpp.ClientXMPP):
-    def __init__(self, jid, password):
+    def __init__(self, master, jid_password):
+        sleekxmpp.ClientXMPP.__init__(self, *jid_password)
+        
+        self.master=master
+      
+        # gmail xmpp server is actually at talk.google.com
+        if jid_password[0].find("@gmail.com")!=-1:
+            self.connect_address = ("talk.google.com", 5222)
+        else:
+            self.connect_address = None
+        #event handlers are sleekxmpp's way of dealing with important xml tags it recieves
+        #the only unusual event handler here is the one for "message".
+        #this is set to get_message and is used to filter data recieved over the chat server
+        self.add_event_handler("session_start", lambda event: self.session_start())
+        self.add_event_handler("disconnected", lambda event: self.disconnected())
+
+        #MUC
+        self.register_plugin('xep_0045')
+            
+        #these handle the custom iq stanzas
+        self.register_handler(callback.Callback('Hexchat Connection Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
+        self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('message@type=groupchat/connect'),self.master.connect_handler))
+        self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
+        self.register_handler(callback.Callback('Hexchat Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
+        self.register_handler(callback.Callback('Hexchat Result Handler',stanzapath.StanzaPath('iq@type=result/result'),self.master.result_handler))
+        self.register_handler(callback.Callback('Hexchat Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
+        self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error'),self.master.error_handler))
+            
+        # Connect to XMPP server
+        if self.connect(self.connect_address):
+            self.process()
+        else:
+            raise(Exception(jid_password[0]+" could not connect"))    
+                  
+    ### session management mathods:
+
+    def session_start(self):
+        """Called when the bot connects and establishes a session with the XMPP server."""
+        
+        # XMPP spec says that we should broadcast our presence when we connect.
+        self.send_presence()
+        self.plugin['xep_0045'].joinMUC(self.master.room, self.boundjid.user)
+
+    def disconnected(self):
+        """Called when the bot disconnects from the XMPP server.
+        Try to reconnect.
+        """
+
+        logging.warning("XMPP chat server disconnected")
+        logging.debug("Trying to reconnect")
+        if self.connect(self.connect_address):
+            logging.debug("connection reestabilshed")
+        else:
+            raise(Exception(self.boundjid.bare+" could not connect"))            
+
+"""this class exchanges data between tcp sockets and xmpp servers."""
+class master():
+    def __init__(self, room, jid_passwords):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
         'jid' is the login username@chatserver
         'password' is the password to login with
         """
+
+        self.room=room
 
         # <local_address> => <listening_socket> dictionary,
         # where 'local_address' is an IP:PORT string with the locallistening address,
@@ -130,43 +179,29 @@ class bot(sleekxmpp.ClientXMPP):
 
         #peer's resources
         self.peer_resources={}
+            
+        #initialize the other sleekxmpp clients.
+        self.bots=[]
+        for jid_password in jid_passwords:
+            self.bots.append(bot(self, jid_password))
 
         #rate at which to send data over the chat server
-        self.avg_throttle_rate=MIN_THROTTLE_RATE
+        self.avg_throttle_rate=MIN_THROTTLE_RATE/float(len(self.bots))
 
-        #initialize the sleekxmpp client.
-        sleekxmpp.ClientXMPP.__init__(self, jid, password)
-
-        # gmail xmpp server is actually at talk.google.com
-        if jid.find("@gmail.com")!=-1:
-            self.connect_address = ("talk.google.com", 5222)
-        else:
-            self.connect_address = None
-
-        #event handlers are sleekxmpp's way of dealing with important xml tags it recieves
-        #the only unusual event handler here is the one for "message".
-        #this is set to get_message and is used to filter data recieved over the chat server
-        self.add_event_handler("session_start", self.session_start)
-        self.add_event_handler("disconnected", self.disconnected)
-        
-        #these handle the custom iq stanzas
-        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Connection Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=set/connect'),self.connect_handler))
-        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Message Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('message@type=chat/connect'),self.connect_handler))
-        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Disconnection Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=set/disconnect'),self.disconnect_handler))
-        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Result Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=result/result'),self.result_handler))
-        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('Hexchat Data Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=set/packet'),self.data_handler))
-        self.register_handler(sleekxmpp.xmlstream.handler.callback.Callback('IQ Error Handler',sleekxmpp.xmlstream.matcher.stanzapath.StanzaPath('iq@type=error'),self.error_handler))
+        self.bot_index=0
         #The scheduler is xmpp's multithreaded todo list
         #This line adds asyncore's loop to the todo list
         #It tells the scheduler to evaluate asyncore.loop(0.0, True, self.map, 1)
-        self.scheduler.add("asyncore loop", ASYNCORE_LOOP_RATE, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
-
-        # Connect to XMPP server
-        if self.connect(self.connect_address):
-            self.process()
+        if len(self.bots)>1:
+            self.bots[0].scheduler.add("asyncore loop 0", 0.0, lambda: self.asyncore_loop(0))
         else:
-            raise(Exception(jid+" could not connect"))       
+            self.bots[0].scheduler.add("asyncore loop 0", ASYNCORE_LOOP_RATE, asyncore.loop, (0.0, True, self.map, 1), repeat=True)
 
+    def asyncore_loop(self, index):
+        asyncore.loop(0.0, True, self.map, 1)
+        index=(index+1)%len(self.bots)
+        self.bots[index].scheduler.add("asyncore loop %d" % index, ASYNCORE_LOOP_RATE, lambda: self.asyncore_loop(index))
+        
     def calculate_avg_rates(self):
         num_sockets=0
         throttle_rate=0
@@ -180,25 +215,29 @@ class bot(sleekxmpp.ClientXMPP):
 
         return(self.avg_throttle_rate)
 
-    ### XMPP handling methods:
+    #turn local address and remote address into xml stanzas in the given element tree
+    def format_header(self, local_address, remote_address, xml):       
+        local_ip_stanza=ElementTree.Element("local_ip")
+        local_ip_stanza.text=local_address[0]
+        xml.append(local_ip_stanza)      
+              
+        local_port_stanza=ElementTree.Element("local_port")
+        local_port_stanza.text=str(local_address[1])
+        xml.append(local_port_stanza)
+        
+        remote_ip_stanza=ElementTree.Element("remote_ip")
+        remote_ip_stanza.text=local_address[0]
+        xml.append(remote_ip_stanza)
 
-    def session_start(self, event):
-        """Called when the bot connects and establishes a session with the XMPP server."""
+        remote_port_stanza=ElementTree.Element("remote_port")
+        remote_port_stanza.text=str(remote_address[1])
+        xml.append(remote_port_stanza)
 
-        # XMPP spec says that we should broadcast our presence when we connect.
-        self.send_presence()
-
-    def disconnected(self, event):
-        """Called when the bot disconnects from the XMPP server.
-        Try to reconnect.
-        """
-
-        logging.warning("XMPP chat server disconnected")
-        logging.debug("Trying to reconnect")
-        if self.connect(self.connect_address):
-            logging.debug("connection reestabilshed")
-        else:
-            raise(Exception(jid+" could not connect"))
+        aliases_stanza=ElementTree.Element("aliases")
+        aliases_stanza.text=",".join(map(lambda bot: bot.boundjid.full, self.bots))
+        xml.append(aliases_stanza)
+        
+        return(xml)
             
     #incomming xml handlers
 
@@ -207,25 +246,31 @@ class bot(sleekxmpp.ClientXMPP):
 
     def connect_handler(self, iq):
         try:
-            key=iq_to_key(iq['connect'], iq['from'])
+            key=iq_to_key(iq['connect'])
         except ValueError:
             logging.warn('recieved bad port')
             return()
 
-        if not key in self.client_sockets:
-            self.initiate_connection(*key)
-            if key in self.client_sockets:
-                try:
-                    self.client_sockets[key].peer_maxsize=int(iq['connect']['maxsize'])
-                except ValueError:
-                    logging.warn("connection request recieved with bad maxsize value") 
-        else:
+        if key in self.client_sockets:
             logging.warn("connection request recieved from a connected socket")   
+            return()
+            
+        try:
+            peer_maxsize=int(iq['connect']['maxsize'])
+        except ValueError:
+            logging.warn("connection request recieved with bad maxsize value") 
+            return()
+                
+        self.initiate_connection(*key)
+        if key in self.client_sockets:
+            self.client_sockets[key].peer_maxsize=peer_maxsize
+            self.client_sockets[key].aliases=iq['connect']['aliases'].split(',')
+            
 
     def disconnect_handler(self, iq):
         """Handles incoming xmpp iqs for disconnections"""
         try:
-            key=iq_to_key(iq['disconnect'], iq['from'])
+            key=iq_to_key(iq['disconnect'])
         except ValueError:
             logging.warn('recieved bad port')
             return()
@@ -240,7 +285,7 @@ class bot(sleekxmpp.ClientXMPP):
     def data_handler(self, iq):
         """Handles incoming xmpp iqs for data"""
         try:
-            key=iq_to_key(iq['packet'], iq['from'])
+            key=iq_to_key(iq['packet'])
         except ValueError:
             logging.warn('recieved bad port')
             return()
@@ -272,6 +317,7 @@ class bot(sleekxmpp.ClientXMPP):
             id_diff=new_id-self.client_sockets[key].last_id_recieved
             if id_diff<=0 and id_diff>-sys.maxsize/2.:
                 logging.debug("Recieved redundant message")
+                self.send_result(key,str(self.client_sockets[key].last_id_recieved))
                 return()
             num_new_messages= id_diff % self.client_sockets[key].peer_maxsize
             #total up the length of each cache sent in the message that we already recieved
@@ -290,84 +336,103 @@ class bot(sleekxmpp.ClientXMPP):
         
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
         #acknowledge the data was recieved
-        logging.debug("%s:%d adding id " % key[0] + "%s" % (iq['id']) + " to result buffer")
-        self.client_sockets[key].result_buffer=iq['id']
+        self.send_result(key, iq['id'])
         try:
             while data:    
                 data=data[self.client_sockets[key].send(data):]
         except KeyError:
             return()
            
-    def result_handler(self, iq):
+    def connect_ack_handler(self, iq):
         try:
-            key=iq_to_key(iq['result'], iq['from'])
+            key=iq_to_key(iq['connect_ack'])
         except ValueError:
             logging.warn('recieved bad port')
             return()
-        if not key in self.client_sockets:
-            key0=(key[0], iq['from'].bare, key[2])
+            
+        if key in self.client_sockets:
+            logging.debug("key not found in sockets or pending connections")
+            return()
+
+        for alias in key[1]:
+            key0=(key[0], sleekxmpp.xmlstream.JID(alias).bare, key[2])
             if key0 in self.pending_connections:
-                logging.debug("%s:%d recieved connection result: " % key[0] + iq['result']['response'] + " from %s:%d" % key[2])
-                self.peer_resources[key0[1]]=iq['from']
-                if iq['result']['response']=="failure":
-                    self.pending_connections[key0].close()
-                    del(self.pending_connections[key0])
-                else:
-                    try:
-                        peer_maxsize=int(iq['result']['response'])
-                    except ValueError:
-                        logging.warn("bad result recieved")
-                        return()
-                    self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
-                    self.client_sockets[key].peer_maxsize=peer_maxsize
-                    self.initialize_client_socket(key)
+                break
+                
+        if key0 in self.pending_connections:
+            logging.debug("%s:%d recieved connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
+            self.peer_resources[key0[1]]=iq['from']
+            if iq['connect_ack']['response']=="failure":
+                self.pending_connections[key0].close()
+                del(self.pending_connections[key0])
             else:
-                logging.debug("key not found in sockets or pending connections")
-        else:
-            try:
-                response_id=int(iq['result']['response'])
-            except ValueError:
-                logging.warn("bad result")
-                return()
-                
-            if response_id<0:
-                logging.warn("negative response id recieved")
-                return()
-                
-            cache_depth=len(self.client_sockets[key].cache_lengths)
-            num_caches_to_clear=cache_depth-((self.client_sockets[key].id-response_id) % sys.maxsize)
-            if num_caches_to_clear>0:
-                #restart the clock on the timeout
                 try:
-                    self.scheduler.remove("timeout %d" % (hash(key)))
+                    peer_maxsize=int(iq['connect_ack']['response'])
                 except ValueError:
-                    pass
-                #adjust throttle rate
-                new_throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
-                rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
-                self.client_sockets[key].throttle_rate=rescaled_throttle_rate
-                logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
-                self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
-                logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
+                    logging.warn("bad result recieved")
+                    return()
+                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
+                self.client_sockets[key].peer_maxsize=peer_maxsize
+                self.client_sockets[key].aliases=iq['connect_ack']['aliases'].split(',')
+                self.initialize_client_socket(key)
+        else:
+            logging.warn('iq not in pending connections')
+
+    def result_handler(self, iq):
+        try:
+            key=iq_to_key(iq['result'])
+        except ValueError:
+            logging.warn('recieved bad port')
+            return()
+            
+        if not key in self.client_sockets:
+            logging.warn("recieved invalid result")
+            return()
+            
+        try:
+            response_id=int(iq['result']['response'])
+        except ValueError:
+            logging.warn("bad result")
+            return()
                 
-                self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
-                #data has been acknowledged
-                #clear the cache
-                logging.debug("clearing %d caches" % (num_caches_to_clear))
-                cache_data_length=sum(self.client_sockets[key].cache_lengths[:num_caches_to_clear])
-                self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_data_length:]
-                self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[num_caches_to_clear:]
-                self.client_sockets[key].cache_buffer_lengths=self.client_sockets[key].cache_buffer_lengths[num_caches_to_clear:]
-            else:
-                logging.debug("result recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
-                #adjust throttle rate to maximum time span recorded
+        if response_id<0:
+            logging.warn("negative response id recieved")
+            return()
+                
+        cache_depth=len(self.client_sockets[key].cache_lengths)
+        num_caches_to_clear=cache_depth-((self.client_sockets[key].id-response_id) % sys.maxsize)
+        if num_caches_to_clear>0:
+            #restart the clock on the timeout
+            #try:
+            #    self.scheduler.remove("timeout %d" % (hash(key)))
+            #except ValueError:
+            #    pass
+            #adjust throttle rate
+            new_throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
+            rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
+            self.client_sockets[key].throttle_rate=rescaled_throttle_rate
+            logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
+            self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+            logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
+             
+            self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
+            #data has been acknowledged
+            #clear the cache
+            logging.debug("clearing %d caches" % (num_caches_to_clear))
+            cache_data_length=sum(self.client_sockets[key].cache_lengths[:num_caches_to_clear])
+            self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_data_length:]
+            self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[num_caches_to_clear:]
+        else:
+            logging.debug("result recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
+            #adjust throttle rate to maximum time span recorded
+            if cache_depth>0:
                 self.client_sockets[key].throttle_rate=time.time()-self.client_sockets[key].cache_time[-1]
 
     #methods for sending xml
 
     def send_data(self, key, data):
         (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("packet"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("packet"))
         packet.attrib['xmlns']="hexchat:packet"
         
         data_stanza=ElementTree.Element("data")
@@ -383,15 +448,25 @@ class bot(sleekxmpp.ClientXMPP):
 
     def send_disconnect(self, key):
         (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("disconnect"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
         
     def send_result(self, key, response):
         (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("result"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("result"))
         packet.attrib['xmlns']="hexchat:result"
+        response_stanza=ElementTree.Element("response")
+        response_stanza.text=response
+        packet.append(response_stanza)
+        logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
+        self.send_iq(packet, key, 'result')
+
+    def send_connect_ack(self, key, response):
+        (local_address, remote_address)=(key[0], key[2])
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
+        packet.attrib['xmlns']="hexchat:connect_ack"
         response_stanza=ElementTree.Element("response")
         response_stanza.text=response
         packet.append(response_stanza)
@@ -400,7 +475,7 @@ class bot(sleekxmpp.ClientXMPP):
 
     def send_connect_iq(self, key):
         (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         maxsize_stanza=ElementTree.Element('maxsize')
         maxsize_stanza.text=str(sys.maxsize)
         packet.append(maxsize_stanza)
@@ -410,26 +485,36 @@ class bot(sleekxmpp.ClientXMPP):
         
     def send_connect_message(self, key):
         (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         maxsize_stanza=ElementTree.Element('maxsize')
         maxsize_stanza.text=str(sys.maxsize)
         packet.append(maxsize_stanza)
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-        message=self.Message()
-        message['from']=self.boundjid
+        self.bot_index=(self.bot_index+1)%len(self.bots)
+        bot=self.bots[self.bot_index]
+        message=bot.Message()
+        message['from']=bot.boundjid
         message['to']=key[1]
-        message['type']='chat'
+        message['type']='groupchat'
         message.append(packet)
         message.send()
 
     def send_iq(self, packet, key, iq_type):
-        iq=self.Iq()
-        iq['from']=self.boundjid
-        iq['to']=key[1]
+        self.bot_index=(self.bot_index+1)%len(self.bots)
+        bot=self.bots[self.bot_index]
+        iq=bot.Iq()
+        iq['from']=bot.boundjid
         iq['type']=iq_type
         if key in self.client_sockets:
             iq['id']=str(self.client_sockets[key].id)
+            self.client_sockets[key].alias_index=(self.client_sockets[key].alias_index+1)%len(self.client_sockets[key].aliases)
+            iq['to']=self.client_sockets[key].aliases[self.client_sockets[key].alias_index]
+        else:
+            if type(key[1])==frozenset:
+                iq['to']=set(key[1]).pop()
+            else:
+                iq['to']=key[1]
         iq.append(packet)
         iq.send(False)
 
@@ -440,29 +525,29 @@ class bot(sleekxmpp.ClientXMPP):
         
         key=(local_address, peer, remote_address)
         try: # connect to the ip:port
-            connected_socket=socket.create_connection(local_address)
+            logging.debug("trying to connect to %s:%d" % local_address)
+            connected_socket=socket.create_connection(local_address, timeout=2.0)
         except (socket.error, OverflowError, ValueError):
             logging.warning("could not connect to %s:%d" % local_address)
             #if it could not connect, tell the bot on the the other it could not connect
-            self.send_result(key, "failure")
+            self.send_connect_ack(key, "failure")
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
         self.client_sockets[key] = asyncore.dispatcher(connected_socket, map=self.map)
+        self.client_sockets[key].aliases=list(key[1])
         self.initialize_client_socket(key)
-        self.send_result(key, str(sys.maxsize))
+        self.send_connect_ack(key, str(sys.maxsize))
 
     def initialize_client_socket(self, key):
         #just some asyncore initialization stuff
+        self.client_sockets[key].alias_index=0
         self.client_sockets[key].buffer=b''
-        self.client_sockets[key].buffer_lengths=[]
         self.client_sockets[key].id=0
-        self.client_sockets[key].result_buffer=None
         self.client_sockets[key].last_id_recieved=0
         self.client_sockets[key].cache_time=[]
         self.client_sockets[key].cache_lengths=[]
-        self.client_sockets[key].cache_buffer_lengths=[]
         self.client_sockets[key].cache_data=b''
         self.client_sockets[key].writable=lambda: False
         self.client_sockets[key].handle_read=lambda: self.handle_read(key)
@@ -470,12 +555,11 @@ class bot(sleekxmpp.ClientXMPP):
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
         self.client_sockets[key].throttle_rate=self.calculate_avg_rates()
         self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
-        self.scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key), (), repeat=True)
-        self.scheduler.add("check result buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_result_buffer(key), (), repeat=True)
+        self.bots[0].scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key,0), (), repeat=len(self.bots)==1)
 
     def add_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
-        
+        self.bot_index=(self.bot_index+1)%len(self.bots)
         self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
         #just some asyncore initialization stuff
         self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -492,7 +576,6 @@ class bot(sleekxmpp.ClientXMPP):
         try:
             data=self.client_sockets[key].recv(self.client_sockets[key].recv_rate)
             self.client_sockets[key].buffer+=data
-            self.client_sockets[key].buffer_lengths.append(len(data))
         except KeyError: #socket got deleted while writing to the buffer
             pass
 
@@ -525,43 +608,32 @@ class bot(sleekxmpp.ClientXMPP):
         self.send_disconnect(key)
         self.delete_socket(key)
 
-    def delete_socket(self, key):
-        try:
-            self.scheduler.remove("timeout %d" % (hash(key)))
-        except ValueError:
-            pass
-        try:
-            self.scheduler.remove("check data buffer %d" % (hash(key)))
-        except ValueError:
-            pass
-        try:
-            self.scheduler.remove("check result buffer %d" % (hash(key)))
-        except ValueError:
-            pass
+    def delete_socket(self, key):       
+        if len(self.bots)==1:
+            self.bots[0].scheduler.remove("check data buffer %d" % hash(key))
+            
         self.client_sockets[key].close()
         del(self.client_sockets[key])
 
     #check client sockets for buffered data
-    def check_data_buffer(self, key):
+    def check_data_buffer(self, key, index):
         try:
+            if len(self.bots)>1:
+                index=(index+1)%len(self.bots)
+                self.bots[index].scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key,index), ())
             if self.client_sockets[key].buffer or self.client_sockets[key].cache_data:
                 data=self.client_sockets[key].buffer
                 self.client_sockets[key].buffer=b''
-                buffer_lengths=self.client_sockets[key].buffer_lengths
-                self.client_sockets[key].buffer_lengths=[]
                 if data:
-                    self.client_sockets[key].cache_buffer_lengths.append(buffer_lengths)
                     self.client_sockets[key].cache_lengths.append(len(data))
                     self.client_sockets[key].cache_data+=data
                     initial_cache_length=len(self.client_sockets[key].cache_data)
                     while len(self.client_sockets[key].cache_data)>MAX_DATA:
                         logging.debug("garbage collecting cache")
-                        num_garbage_bytes=self.client_sockets[key].cache_buffer_lengths[0][0]
-                        self.client_sockets[key].cache_buffer_lengths[0]=self.client_sockets[key].cache_buffer_lengths[0][1:]
-                        if not self.client_sockets[key].cache_buffer_lengths[0]:
+                        num_garbage_bytes=len(self.client_sockets[key].cache_data)-MAX_DATA
+                        if num_garbage_bytes>=self.client_sockets[key].cache_lengths[0]:
                             self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[1:]
                             self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[1:]
-                            self.client_sockets[key].cache_buffer_lengths=self.client_sockets[key].cache_buffer_lengths[1:]
                         else:
                             self.client_sockets[key].cache_lengths[0]-=num_garbage_bytes
                         self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]                         
@@ -570,21 +642,9 @@ class bot(sleekxmpp.ClientXMPP):
                         
                 self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data, 9)).decode("UTF-8"))
                 self.client_sockets[key].cache_time.append(time.time())
-                try:
-                    self.scheduler.add("timeout %d" % (hash(key)), TIMEOUT, lambda: self.handle_close(key), ())
-                except ValueError:
-                    pass
         except KeyError:
             pass
-            
-    #check client sockets for buffered result
-    def check_result_buffer(self, key):
-        try:
-            if self.client_sockets[key].result_buffer!=None:
-                self.send_result(key, self.client_sockets[key].result_buffer)
-                self.client_sockets[key].result_buffer=None
-        except KeyError:
-            pass
+
 
 if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
@@ -594,16 +654,19 @@ if __name__ == '__main__':
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_ack)
         
     if sys.argv[1]=="-c":
-        if not len(sys.argv) in (5,10):
-            raise(Exception("Wrong number of command line arguements"))
-        else:
-            username=sys.argv[3]
-            password=sys.argv[4]
-            bot0=bot(username, password)
-            if len(sys.argv)==10:
-                bot0.add_server_socket((sys.argv[5],int(sys.argv[6])), sys.argv[7], (sys.argv[8],int(sys.argv[9])))
+        room=sys.argv[3]
+        index=4
+        username_passwords=[]
+        while index<len(sys.argv) and sys.argv[index]!='-s':
+            username_passwords.append((sys.argv[index], sys.argv[index+1]))
+            index+=2
+
+        master0=master(room, username_passwords)
+        if index<len(sys.argv):
+            master0.add_server_socket((sys.argv[index+1],int(sys.argv[index+2])), sys.argv[index+3], (sys.argv[index+4],int(sys.argv[index+5])))
     else:
         if len(sys.argv)!=3:
             raise(Exception("Wrong number of command line arguements"))
@@ -617,7 +680,7 @@ if __name__ == '__main__':
                 userpass_split=line.find(':')
                 try:
                     username=line[:userpass_split]
-                    bots[username]=bot(username, line[userpass_split+1:-1])
+                    bots[username]=master(username, line[userpass_split+1:-1])
                     continue
                 except IndexError:
                     raise(Exception("No password supplied."))
