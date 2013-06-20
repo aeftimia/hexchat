@@ -55,11 +55,11 @@ class hexchat_connect_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
     interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','response'))
     sub_interfaces=interfaces
     
-class hexchat_result(sleekxmpp.xmlstream.stanzabase.ElementBase):
-    name = 'result'
-    namespace = 'hexchat:result'
-    plugin_attrib = 'result'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','response'))
+class hexchat_data_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
+    name = 'data_ack'
+    namespace = 'hexchat:data_ack'
+    plugin_attrib = 'data_ack'
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','id'))
     sub_interfaces=interfaces
 
 class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -117,7 +117,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('message@type=groupchat/connect'),self.master.connect_handler))
         self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
         self.register_handler(callback.Callback('Hexchat Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
-        self.register_handler(callback.Callback('Hexchat Result Handler',stanzapath.StanzaPath('iq@type=result/result'),self.master.result_handler))
+        self.register_handler(callback.Callback('Hexchat Result Handler',stanzapath.StanzaPath('iq@type=result/data_ack'),self.master.data_ack_handler))
         self.register_handler(callback.Callback('Hexchat Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
         self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error'),self.master.error_handler))
             
@@ -302,7 +302,7 @@ class master():
             id_diff=new_id-self.client_sockets[key].last_id_recieved
             if id_diff<=0 and id_diff>-sys.maxsize/2.:
                 logging.debug("Recieved redundant message")
-                self.send_result(key,str(self.client_sockets[key].last_id_recieved))
+                self.send_data_ack(key,str(self.client_sockets[key].last_id_recieved))
                 return()
             num_new_messages= id_diff % self.client_sockets[key].peer_maxsize
             #total up the length of each cache sent in the message that we already recieved
@@ -321,7 +321,7 @@ class master():
         
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
         #acknowledge the data was recieved
-        self.send_result(key, iq['id'])
+        self.send_data_ack(key, iq['id'])
         try:
             while data:    
                 data=data[self.client_sockets[key].send(data):]
@@ -363,9 +363,9 @@ class master():
         else:
             logging.warn('iq not in pending connections')
 
-    def result_handler(self, iq):
+    def data_ack_handler(self, iq):
         try:
-            key=iq_to_key(iq['result'])
+            key=iq_to_key(iq['data_ack'])
         except ValueError:
             logging.warn('recieved bad port')
             return()
@@ -375,7 +375,7 @@ class master():
             return()
             
         try:
-            response_id=int(iq['result']['response'])
+            response_id=int(iq['data_ack']['id'])
         except ValueError:
             logging.warn("bad result")
             return()
@@ -443,14 +443,14 @@ class master():
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
         
-    def send_result(self, key, response):
+    def send_data_ack(self, key, response):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("result"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("data_ack"))
         packet.attrib['xmlns']="hexchat:result"
-        response_stanza=ElementTree.Element("response")
+        response_stanza=ElementTree.Element("id")
         response_stanza.text=response
         packet.append(response_stanza)
-        logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
+        logging.debug("%s:%d" % local_address + " sending data_ack signal to %s:%d" % remote_address)
         self.send_iq(packet, key, 'result')
 
     def send_connect_ack(self, key, response):
@@ -641,7 +641,7 @@ if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
     
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
-    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_result)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_data_ack)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect)
