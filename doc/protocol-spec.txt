@@ -11,7 +11,7 @@ All data concerning the local ip:port, remote ip:port, and various JIDs the comp
     </only_child>
 </iq>
 
-Each stanza in the header will be discussed in the appendix.
+Each stanza in the header will be discussed in section 6.
 
 1. Motivation
 Many countries that censor their citizens' internet access allow access to xmpp chat servers such as google chat. With the appropriate software, these chat servers can be used to connect and relay traffic to tor bridges. Since most xmpp servers support encryption, it would be difficult stop tor traffic from being relayed through xmpp chat servers without blocking access to the chat server itself. 
@@ -93,5 +93,5 @@ remote_ip	==>	remote ip
 remote_port	==>	remote port
 aliases		==>	Comma separated list of JIDs the bot has used to connect to the chat server
 
-5. Acknowledgments
+7. Acknowledgments
 Thanks to asn, xnyhps, and the other tor developers for encoraging this idea and all of the useful feedback.
