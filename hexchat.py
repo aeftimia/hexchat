@@ -186,6 +186,10 @@ class master():
         self.avg_throttle_rate=MIN_THROTTLE_RATE/float(len(self.bots))
 
         self.bot_index=0
+
+        #scheduler
+        self.scheduler=sleekxmpp.xmlstream.scheduler.Scheduler(threading.Event())
+        self.scheduler.process()
         
     def calculate_avg_rates(self):
         num_sockets=0
@@ -371,7 +375,7 @@ class master():
             return()
             
         if not key in self.client_sockets:
-            logging.warn("recieved invalid result")
+            logging.warn("%s:%d recieved data_ack from " % key[0] + "%s:%d, but is not connected." % key[2])
             return()
             
         try:
@@ -387,36 +391,19 @@ class master():
         cache_depth=len(self.client_sockets[key].cache_lengths)
         num_caches_to_clear=cache_depth-((self.client_sockets[key].id-response_id) % sys.maxsize)
         if num_caches_to_clear>0:
-            #restart the clock on the timeout
-            #try:
-            #    self.scheduler.remove("timeout %d" % (hash(key)))
-            #except ValueError:
-            #    pass
+
             #adjust throttle rate
             new_throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
-            rescaled_throttle_rate=(MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2.*len(self.bots)/(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi)/float(len(self.bots))
-            self.client_sockets[key].throttle_rate=rescaled_throttle_rate
-            logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
-            self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
-            logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
-             
-            self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
+            self.adjust_throttle_rate(key, new_throttle_rate)
             #data has been acknowledged
             #clear the cache
             logging.debug("clearing %d caches" % (num_caches_to_clear))
+            self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
             cache_data_length=sum(self.client_sockets[key].cache_lengths[:num_caches_to_clear])
             self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_data_length:]
             self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[num_caches_to_clear:]
         else:
-            logging.debug("result recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
-            #adjust throttle rate to maximum time span recorded
-            if cache_depth>0:
-                new_throttle_rate=time.time()-self.client_sockets[key].cache_time[-1]
-                rescaled_throttle_rate=(MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2.*len(self.bots)/(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi)/float(len(self.bots))
-                self.client_sockets[key].throttle_rate=rescaled_throttle_rate
-                logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
-                self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
-                logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
+            logging.debug("data_ack recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
 
     #methods for sending xml
 
@@ -443,13 +430,13 @@ class master():
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
         
-    def send_data_ack(self, key, response):
+    def send_data_ack(self, key, ack_id):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("data_ack"))
-        packet.attrib['xmlns']="hexchat:result"
-        response_stanza=ElementTree.Element("id")
-        response_stanza.text=response
-        packet.append(response_stanza)
+        packet.attrib['xmlns']='hexchat:data_ack'
+        ack_id_stanza=ElementTree.Element("id")
+        ack_id_stanza.text=ack_id
+        packet.append(ack_id_stanza)
         logging.debug("%s:%d" % local_address + " sending data_ack signal to %s:%d" % remote_address)
         self.send_iq(packet, key, 'result')
 
@@ -545,7 +532,7 @@ class master():
         self.client_sockets[key].handle_close=lambda: self.handle_close(key)
         self.client_sockets[key].throttle_rate=self.calculate_avg_rates()
         self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
-        self.bots[0].scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key,0), (), repeat=len(self.bots)==1)
+        self.scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key), (), repeat=True)
 
     def add_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
@@ -599,25 +586,19 @@ class master():
         self.delete_socket(key)
 
     def delete_socket(self, key):       
-        if len(self.bots)==1:
-            self.bots[0].scheduler.remove("check data buffer %d" % hash(key))
-            
+        self.scheduler.remove("check data buffer %d" % hash(key))
         self.client_sockets[key].close()
         del(self.client_sockets[key])
 
     #check client sockets for buffered data
-    def check_data_buffer(self, key, index):
+    def check_data_buffer(self, key):
         try:
-            if len(self.bots)>1:
-                index=(index+1)%len(self.bots)
-                self.bots[index].scheduler.add("check data buffer %d" % hash(key), self.client_sockets[key].throttle_rate, lambda: self.check_data_buffer(key,index), ())
             if self.client_sockets[key].buffer or self.client_sockets[key].cache_data:
                 data=self.client_sockets[key].buffer
                 self.client_sockets[key].buffer=b''
                 if data:
                     self.client_sockets[key].cache_lengths.append(len(data))
                     self.client_sockets[key].cache_data+=data
-                    initial_cache_length=len(self.client_sockets[key].cache_data)
                     while len(self.client_sockets[key].cache_data)>MAX_DATA:
                         logging.debug("garbage collecting cache")
                         num_garbage_bytes=len(self.client_sockets[key].cache_data)-MAX_DATA
@@ -635,6 +616,14 @@ class master():
                 self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data, 9)).decode("UTF-8"))
         except KeyError:
             pass
+
+    def adjust_throttle_rate(self, key, new_throttle_rate):
+        rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
+        self.client_sockets[key].throttle_rate=rescaled_throttle_rate
+        logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
+        self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+        logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
+
 
 
 if __name__ == '__main__':

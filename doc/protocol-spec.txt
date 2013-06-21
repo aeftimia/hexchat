@@ -61,14 +61,12 @@ ii)	The bot computes the quantity: "number in response stanza" - "id of last mes
 iii)	The bot subtracts the quantity computed in (ii) from the number of caches stored. If this quantity is positive, the bot moves on to (iv)
 iv)	Compute the difference between the current time stamp and the time stamp recorded "result of (iii)" - 1 records ago.
 v)	Set the new throttle rate (rate at which the socket's buffer and caches are checked) to F(result of (iv)), where
-        F(x)=(MIN THROTTLE RATE + arctan(x * 2 * "Number of connected JIDs" / (MIN THROTTLE RATE + MAX THROTTLE RATE)) * 2 * (MAX THROTTLE RATE-MIN THROTTLE RATE) / Pi)
-	/ "Number of connected JIDs"
+        F(x)=MIN THROTTLE RATE + arctan(x * 2 / (MIN THROTTLE RATE + MAX THROTTLE RATE)) * 2 * (MAX THROTTLE RATE-MIN THROTTLE RATE) / Pi
 	, where:
 	MIN THROTTLE RATE	= The minimum time any one JID should wait between sending messages to the same recipient = 1.0 seconds (this value seems to work well)
 	MAX THROTTLE RATE	= The maximum time any one JID should wait between sending messages to the same recipient = 3.0 seconds (this value seems to work well)
-	Number of connected JIDs= The number of accounts the bot has connected to the server
 	Pi			=3.14... 
-        The function, F, rescales the throttle rate so that it never goes above MAX THROTTLE RATE/Number of connected JIDs or below MIN THROTTLE RATE/Number of connected JIDs
+        The function, F, rescales the throttle rate so that it never goes above MAX THROTTLE RATE or below MIN THROTTLE RATE
 vi)	The maximum number of bytes the socket reads at any given recv call adjusted so that garbage collection need not happen for a certain minimum amount of time. This 		is given by:
 	recv rate =  floor(MAX DATA/NUM CACHES * ASYNCORE LOOP RATE/throttle rate)
 	, where:
