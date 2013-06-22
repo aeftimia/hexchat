@@ -11,9 +11,7 @@ import xml.etree.cElementTree as ElementTree
 import math
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
-
 import queue
-import copy
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -22,13 +20,13 @@ import copy
 if sys.version_info < (3, 0):
     reload(sys)
     sys.setdefaultencoding('utf8')
-    sys.maxsize=sys.maxint
 else:
     raw_input = input
 
 THROTTLE_RATE=1.0
-ASYNCORE_LOOP_RATE=0.05
+ASYNCORE_LOOP_RATE=0.1
 RECV_RATE=2**17*float(ASYNCORE_LOOP_RATE)/THROTTLE_RATE
+MAX_ID=2**32-1
 
 LOCK=threading.RLock()
 
@@ -43,14 +41,14 @@ class hexchat_connect_message(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'connect'
     namespace = 'hexchat:connect_message'
     plugin_attrib = 'connect_message'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','maxsize', 'to'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases'))
     sub_interfaces=interfaces
 
 class hexchat_connect_iq(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'connect'
     namespace = 'hexchat:connect_iq'
     plugin_attrib = 'connect_iq'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','maxsize'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases'))
     sub_interfaces=interfaces
 
 class hexchat_connect_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -71,7 +69,7 @@ class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
 def iq_to_key(iq):
-    if len(iq['remote_port'])>len(str(sys.maxsize)) or len(iq['local_port'])>len(str(sys.maxsize)):
+    if len(iq['remote_port'])>len("success") or len(iq['local_port'])>len("success"):
         #these ports are way too long
         raise(ValueError)
         
@@ -142,6 +140,86 @@ class bot(sleekxmpp.ClientXMPP):
         else:
             raise(Exception(self.boundjid.bare+" could not connect"))            
 
+
+class client_socket(asyncore.dispatcher):
+    def __init__(self, master, key, socket):
+        self.master=master
+        self.key=key
+        self.aliases=list(key[1])
+        self.id=0
+        self.last_id_received=1
+        self.incomming_messages=[]
+        self.alias_index=0
+        self.buffer=b''
+        self.close_thread=False
+        self.running=True
+        self.run_thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer())
+        self.run_thread.start()
+        asyncore.dispatcher.__init__(self, socket, map=self.master.map)
+
+    def readable(self):
+        return(not self.close_thread)
+
+    def writable(self):
+        return(False)
+
+    def handle_read(self):
+        """Called when a TCP socket has stuff to be read from it."""
+        
+        try:
+            data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
+            self.buffer+=data
+        except KeyError: #socket got deleted while writing to the buffer
+            pass
+
+    #check client sockets for buffered data
+    def check_data_buffer(self):
+        while self.running:
+            if self.buffer:
+                data=self.buffer
+                self.buffer=b''
+                if data:                    
+                    self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
+            time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
+
+    def handle_close(self):
+        """Called when the TCP client socket closes."""
+        if self.close_thread:
+            return()
+        (local_address, remote_address)=(self.key[0], self.key[2])
+        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+        self.master.send_disconnect(self.key)
+        self.master.delete_socket(self.key)
+
+class server_socket(asyncore.dispatcher):
+    def __init__(self, master, local_address, peer, remote_address):
+        self.master=master
+        self.local_address=local_address
+        self.peer=peer
+        self.remote_address=remote_address
+        asyncore.dispatcher.__init__(self, map=self.master.map)
+        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.set_reuse_addr()
+        self.bind(local_address)
+        self.listen(1023)
+
+    def handle_accept(self):
+        """Called when we have a new incoming connection to one of our listening sockets."""
+        
+        connection, local_address = self.accept()
+        threading.Thread(name="%s:%d" % local_address + " accepted by %s:%d" % self.local_address, target=lambda: self.handle_accept_thread(local_address, connection)).start()
+
+    def handle_accept_thread(self, local_address, connection):
+        with self.master.lock:
+            logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
+            self.master.pending_connections[(local_address, self.peer, self.remote_address)]=connection
+            if self.peer in self.master.peer_resources:
+                logging.debug("found resource, sending connection request via iq")
+                self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address))
+            else:
+                logging.debug("sending connection request via message")
+                self.master.send_connect_message((local_address, self.peer, self.remote_address))       
+
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
     def __init__(self, jid_passwords):
@@ -186,6 +264,17 @@ class master():
 
         self.bot_index=0
 
+        self.lock=threading.Lock()
+        #asyncore map
+        self.map={}
+        self.loop_thread=threading.Thread(name=",".join(map(lambda bot: bot.boundjid.full, self.bots)), target=lambda: self.asyncore_loop())
+        self.loop_thread.start()
+
+    def asyncore_loop(self):
+        while True:
+            with self.lock:
+                asyncore.loop(0.0, True, count=1, map=self.map)
+            time.sleep(ASYNCORE_LOOP_RATE)
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
         local_ip_stanza=ElementTree.Element("local_ip")
@@ -225,20 +314,13 @@ class master():
         if key in self.client_sockets:
             logging.warn("connection request received from a connected socket")   
             return()
-            
-        try:
-            peer_maxsize=int(iq['connect_iq']['maxsize'])
-        except ValueError:
-            logging.warn("connection request received with bad maxsize value") 
-            return()
                 
         self.initiate_connection(*key)
         if key in self.client_sockets:
-            self.client_sockets[key].peer_maxsize=peer_maxsize
             self.client_sockets[key].aliases=iq['connect_iq']['aliases'].split(',')
 
     def connect_message_handler(self, msg):
-        if not msg['connect_message']['to'] in map(lambda bot: bot.boundjid.bare, self.bots):
+        if not msg['to'] in map(lambda bot: bot.boundjid.bare, self.bots):
             return()
             
         try:
@@ -250,16 +332,9 @@ class master():
         if key in self.client_sockets:
             logging.warn("connection request received from a connected socket")   
             return()
-            
-        try:
-            peer_maxsize=int(msg['connect_message']['maxsize'])
-        except ValueError:
-            logging.warn("connection request received with bad maxsize value") 
-            return()
                 
         self.initiate_connection(*key)
         if key in self.client_sockets:
-            self.client_sockets[key].peer_maxsize=peer_maxsize
             self.client_sockets[key].aliases=msg['connect_message']['aliases'].split(',')            
 
     def disconnect_handler(self, iq):
@@ -287,11 +362,11 @@ class master():
             return()
 
         id_diff=iq_id-self.client_sockets[key].last_id_received
-        if id_diff<0 and id_diff>-self.client_sockets[key].peer_maxsize/2.:
+        if id_diff<0 and id_diff>-MAX_ID/2.:
             logging.warn("received redundant message")
             return()
 
-        id_diff=id_diff%self.client_sockets[key].peer_maxsize
+        id_diff=id_diff%MAX_ID
         while id_diff>=len(self.client_sockets[key].incomming_messages):
             self.client_sockets[key].incomming_messages.append(None)
 
@@ -332,8 +407,8 @@ class master():
             self.delete_socket(key) 
             return()
 
-        id_diff=(iq_id-self.client_sockets[key].last_id_received)%self.client_sockets[key].peer_maxsize
-        if id_diff<0 and id_diff>-self.client_sockets[key].peer_maxsize/2.:
+        id_diff=(iq_id-self.client_sockets[key].last_id_received)%MAX_ID
+        if id_diff<0 and id_diff>-MAX_ID/2.:
             logging.warn("recived redundant message")
             return()
 
@@ -362,7 +437,7 @@ class master():
                     self.delete_socket(key)
                     break
                 self.client_sockets[key].incomming_messages=self.client_sockets[key].incomming_messages[1:]
-                self.client_sockets[key].last_id_received=(self.client_sockets[key].last_id_received+1)%self.client_sockets[key].peer_maxsize
+                self.client_sockets[key].last_id_received=(self.client_sockets[key].last_id_received+1)%MAX_ID
                 while data:   
                     data=data[self.client_sockets[key].send(data):]
         except KeyError:
@@ -391,15 +466,7 @@ class master():
                 self.pending_connections[key0].close()
                 del(self.pending_connections[key0])
             else:
-                try:
-                    peer_maxsize=int(iq['connect_ack']['response'])
-                except ValueError:
-                    logging.warn("bad result received")
-                    return()
-                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0))
-                self.client_sockets[key].peer_maxsize=peer_maxsize
-                self.client_sockets[key].aliases=iq['connect_ack']['aliases'].split(',')
-                self.initialize_client_socket(key)
+                self.create_client_socket(key, self.pending_connections.pop(key0))
         else:
             logging.warn('iq not in pending connections')
 
@@ -415,7 +482,7 @@ class master():
         packet.append(data_stanza)
 
         id_stanza=ElementTree.Element('id')
-        self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+        self.client_sockets[key].id=(self.client_sockets[key].id+1)%MAX_ID
         id_stanza.text=str(self.client_sockets[key].id)
         packet.append(id_stanza)
         
@@ -429,7 +496,7 @@ class master():
 
         id_stanza=ElementTree.Element('id')
         if key in self.client_sockets:
-            self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+            self.client_sockets[key].id=(self.client_sockets[key].id+1)%MAX_ID
             id_stanza.text=str(self.client_sockets[key].id)
         else:
             id_stanza.text="None"
@@ -450,9 +517,6 @@ class master():
     def send_connect_iq(self, key):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
-        maxsize_stanza=ElementTree.Element('maxsize')
-        maxsize_stanza.text=str(sys.maxsize)
-        packet.append(maxsize_stanza)
         packet.attrib['xmlns']="hexchat:connect_iq"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
@@ -461,14 +525,6 @@ class master():
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect_message"
-        
-        maxsize_stanza=ElementTree.Element('maxsize')
-        maxsize_stanza.text=str(sys.maxsize)
-        packet.append(maxsize_stanza)
-
-        to_stanza=ElementTree.Element('to')
-        to_stanza.text=key[1]
-        packet.append(to_stanza)
         
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
         self.bot_index=(self.bot_index+1)%len(self.bots)
@@ -515,77 +571,24 @@ class master():
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
-        self.client_sockets[key] = asyncore.dispatcher(connected_socket)
-        self.client_sockets[key].aliases=list(key[1])
-        self.initialize_client_socket(key)
-        self.send_connect_ack(key, str(sys.maxsize))
+        self.create_client_socket(key, connected_socket)
+        self.send_connect_ack(key, "success")
 
-    def initialize_client_socket(self, key):
-        #just some asyncore initialization stuff
-        self.client_sockets[key].id=0
-        self.client_sockets[key].last_id_received=1
-        self.client_sockets[key].incomming_messages=[]
-        self.client_sockets[key].alias_index=0
-        self.client_sockets[key].buffer=b''
-        self.client_sockets[key].writable=lambda: False
-        self.client_sockets[key].handle_read=lambda: self.handle_read(key)
-        self.client_sockets[key].readable=lambda: True
-        self.client_sockets[key].close_thread=False
-        self.client_sockets[key].handle_close=lambda: self.handle_close(key)
-        self.client_sockets[key].running=True
-        self.client_sockets[key].thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer(key))
-        self.client_sockets[key].thread.start()
+    def create_client_socket(self, key, socket):
+        threading.Thread(name="create client socket %d" % hash(key), target=lambda: self.create_client_socket_thread(key, socket)).start()
 
-    def add_server_socket(self, local_address, peer, remote_address):
+    def create_client_socket_thread(self, key, socket):
+        with self.lock:
+            self.client_sockets[key] = client_socket(self, key, socket)
+
+    def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
-        self.bot_index=(self.bot_index+1)%len(self.bots)
-        self.server_sockets[local_address] = asyncore.dispatcher()
-        #just some asyncore initialization stuff
-        self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_sockets[local_address].writable=lambda: False
-        self.server_sockets[local_address].set_reuse_addr()
-        self.server_sockets[local_address].bind(local_address)
-        self.server_sockets[local_address].handle_accept = lambda: self.handle_accept(local_address, peer, remote_address)
-        self.server_sockets[local_address].listen(1023)
-        
-    ### asyncore callbacks:
+        threading.Thread(name="create server socket %d" % hash((local_address, peer, remote_address)), target=lambda: self.create_server_socket_thread(local_address, peer, remote_address)).start()
 
-    def handle_read(self, key):
-        """Called when a TCP socket has stuff to be read from it."""
-        try:
-            data=self.client_sockets[key].recv(int(RECV_RATE*float(len(self.bots))))
-            self.client_sockets[key].buffer+=data
-        except KeyError: #socket got deleted while writing to the buffer
-            pass
-
-    def handle_accept(self, local_address, peer, remote_address):
-        """Called when we have a new incoming connection to one of our listening sockets."""
-
-        connection, local_address = self.server_sockets[local_address].accept()
+    def create_server_socket_thread(self, local_address, peer, remote_address):
+        with self.lock:
+            self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
         
-        #add the new connected socket to client_sockets
-        #self.add_client_socket(local_address, peer, remote_address, connection)
-        #send a connection request to the bot waiting on the other side of the xmpp server
-        logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % remote_address)
-        self.pending_connections[(local_address, peer, remote_address)]=connection
-        if peer in self.peer_resources:
-            logging.debug("found resource, sending connection request via iq")
-            self.send_connect_iq((local_address, self.peer_resources[peer], remote_address))
-        else:
-            logging.debug("sending connection request via message")
-            self.send_connect_message((local_address, peer, remote_address))
-        
-        
-    def handle_close(self, key):
-        """Called when the TCP client socket closes."""
-        
-        if self.client_sockets[key].close_thread:
-            return()
-        (local_address, remote_address)=(key[0], key[2])
-        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.send_disconnect(key)
-        self.delete_socket(key)
-
     def delete_socket(self, key):
         if self.client_sockets[key].close_thread:
             return()
@@ -593,25 +596,12 @@ class master():
         self.client_sockets[key].close_thread.start()
 
     def close_thread(self, key):  
-        with LOCK:
-            if not key in self.client_sockets:
-                return()
+        with self.lock:
             self.client_sockets[key].close()
             self.client_sockets[key].running=False
-            while self.client_sockets[key].thread.is_alive():
+            while self.client_sockets[key].run_thread.is_alive():
                 time.sleep(THROTTLE_RATE/float(len(self.bots)))
             del(self.client_sockets[key])
-
-    #check client sockets for buffered data
-    def check_data_buffer(self, key):
-        while self.client_sockets[key].running:
-            if self.client_sockets[key].buffer:
-                data=self.client_sockets[key].buffer
-                self.client_sockets[key].buffer=b''
-                if data:                    
-                    self.send_data(key, base64.b64encode(data).decode("UTF-8"))
-            time.sleep(THROTTLE_RATE/float(len(self.bots)))
-
 
 
 if __name__ == '__main__':
@@ -633,7 +623,7 @@ if __name__ == '__main__':
 
         master0=master(username_passwords)
         if index<len(sys.argv):
-            master0.add_server_socket((sys.argv[index+1],int(sys.argv[index+2])), sys.argv[index+3], (sys.argv[index+4],int(sys.argv[index+5])))
+            master0.create_server_socket((sys.argv[index+1],int(sys.argv[index+2])), sys.argv[index+3], (sys.argv[index+4],int(sys.argv[index+5])))
     else:
         if len(sys.argv)!=3:
             raise(Exception("Wrong number of command line arguements"))
@@ -662,8 +652,5 @@ if __name__ == '__main__':
             except (OverflowError, socket.error, ValueError) as msg:
                 raise(msg)
 
-    #program needs to be kept running on linux
     while True:
-        with LOCK:
-            asyncore.loop(0.0, True, count=1)
-        time.sleep(ASYNCORE_LOOP_RATE)
+        time.sleep(1)
