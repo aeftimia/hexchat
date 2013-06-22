@@ -8,7 +8,6 @@ import base64
 import time
 import threading
 import xml.etree.cElementTree as ElementTree
-import zlib
 import math
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
@@ -37,7 +36,7 @@ class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
     namespace = 'hexchat:disconnect'
     plugin_attrib = 'disconnect'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port', 'aliases'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port', 'aliases','id'))
     sub_interfaces=interfaces
 
 class hexchat_connect_message(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -65,7 +64,7 @@ class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'packet'
     namespace = 'hexchat:packet'
     plugin_attrib = 'packet'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','data', 'chunks'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','data', 'id'))
     sub_interfaces=interfaces
 
 #construct key from iq
@@ -95,9 +94,9 @@ class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
-
+        self.__event_handlers_lock = self.master.event_handlers_lock
         #self.scheduler=self.master.scheduler
-        #self.event_queue = self.master.event_queue
+        self.event_queue = self.master.event_queue
         #self.send_queue = self.master.send_queue      
       
         # gmail xmpp server is actually at talk.google.com
@@ -105,9 +104,9 @@ class bot(sleekxmpp.ClientXMPP):
             self.connect_address = ("talk.google.com", 5222)
         else:
             self.connect_address = None
-        #event handlers are sleekxmpp's way of dealing with important xml tags it recieves
+        #event handlers are sleekxmpp's way of dealing with important xml tags it receives
         #the only unusual event handler here is the one for "message".
-        #this is set to get_message and is used to filter data recieved over the chat server
+        #this is set to get_message and is used to filter data received over the chat server
         self.add_event_handler("session_start", lambda event: self.session_start())
         self.add_event_handler("disconnected", lambda event: self.disconnected())
 
@@ -173,6 +172,8 @@ class master():
         self.peer_resources={}
                
         #initialize the other sleekxmpp clients.
+        self.event_handlers_lock=threading.Lock()
+        self.event_queue=queue.Queue()
         self.bots=[]
         for jid_password in jid_passwords:
             self.bots.append(bot(self, jid_password))
@@ -218,17 +219,17 @@ class master():
         try:
             key=iq_to_key(iq['connect_iq'])
         except ValueError:
-            logging.warn('recieved bad port')
+            logging.warn('received bad port')
             return()
 
         if key in self.client_sockets:
-            logging.warn("connection request recieved from a connected socket")   
+            logging.warn("connection request received from a connected socket")   
             return()
             
         try:
             peer_maxsize=int(iq['connect_iq']['maxsize'])
         except ValueError:
-            logging.warn("connection request recieved with bad maxsize value") 
+            logging.warn("connection request received with bad maxsize value") 
             return()
                 
         self.initiate_connection(*key)
@@ -243,17 +244,17 @@ class master():
         try:
             key=iq_to_key(msg['connect_message'])
         except ValueError:
-            logging.warn('recieved bad port')
+            logging.warn('received bad port')
             return()
 
         if key in self.client_sockets:
-            logging.warn("connection request recieved from a connected socket")   
+            logging.warn("connection request received from a connected socket")   
             return()
             
         try:
             peer_maxsize=int(msg['connect_message']['maxsize'])
         except ValueError:
-            logging.warn("connection request recieved with bad maxsize value") 
+            logging.warn("connection request received with bad maxsize value") 
             return()
                 
         self.initiate_connection(*key)
@@ -266,22 +267,42 @@ class master():
         try:
             key=iq_to_key(iq['disconnect'])
         except ValueError:
-            logging.warn('recieved bad port')
+            logging.warn('received bad port')
             return()
 
-        if key in self.client_sockets:
-            #client wants to disconnect 
-            logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
-            self.delete_socket(key)
-        else:
+        if not key in self.client_sockets:
             logging.warn("%s:%d" % key[2] + " seemed to forge a disconnect to %s:%d." % key[0])
+            return()
+            
+        #client wants to disconnect 
+        if not self.client_sockets[key].incomming_messages:
+            logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
+            self.delete_socket(key)     
+                 
+        try:
+            iq_id=int(iq['disconnect']['id'])
+        except ValueError:
+            logging.warn("received bad id. Disconnecting")
+            self.delete_socket(key) 
+            return()
+
+        id_diff=(iq_id-self.client_sockets[key].last_id_received)%self.client_sockets[key].peer_maxsize
+        if id_diff<0 and id_diff>-self.client_sockets[key].peer_maxsize/2.:
+            logging.warn("received redundant message")
+            return()
+            
+        while id_diff>=len(self.client_sockets[key].incomming_messages):
+            self.client_sockets[key].incomming_messages.append(None)
+
+        self.client_sockets[key].incomming_messages[id_diff]="disconnect"
+            
                     
     def data_handler(self, iq):
         """Handles incoming xmpp iqs for data"""
         try:
             key=iq_to_key(iq['packet'])
         except ValueError:
-            logging.warn('recieved bad port')
+            logging.warn('received bad port')
             return()
             
         if not key in self.client_sockets:
@@ -297,26 +318,52 @@ class master():
             #just a blank packet sent during
             #the disconnect process
             if iq['packet']['data']:
-                logging.warn("%s:%d recieved data from " % key[0] + "%s:%d, but is not connected." % key[2])
+                logging.warn("%s:%d received data from " % key[0] + "%s:%d, but is not connected." % key[2])
                 #this could be because the disconnect signal was dropped by the chat server
                 #send a disconnect again
                 self.send_disconnect(key)
             return()
 
         try:
-            #extract data, ignoring bytes we already recieved
-            data=zlib.decompress(base64.b64decode(iq['packet']['data'].encode("UTF-8")))
+            iq_id=int(iq['packet']['id'])
+        except ValueError:
+            logging.warn("received bad id. Disconnecting")
+            self.delete_socket(key) 
+            return()
+
+        id_diff=(iq_id-self.client_sockets[key].last_id_received)%self.client_sockets[key].peer_maxsize
+        if id_diff<0 and id_diff>-self.client_sockets[key].peer_maxsize/2.:
+            logging.warn("recived redundant message")
+            return()
+
+        try:
+            #extract data, ignoring bytes we already received
+            data=base64.b64decode(iq['packet']['data'].encode("UTF-8"))
         except (UnicodeDecodeError, TypeError, ValueError):
-            logging.warn("%s:%d recieved invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
+            logging.warn("%s:%d received invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
             #silently disconnect
             self.delete_socket(key)
             return()
         
-        logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
+        logging.debug("%s:%d received data from " % key[0] + "%s:%d" % key[2])
+
+
+        while id_diff>=len(self.client_sockets[key].incomming_messages):
+            self.client_sockets[key].incomming_messages.append(None)
+
+        self.client_sockets[key].incomming_messages[id_diff]=data
+
         try:
-            while data:    
-                data=data[self.client_sockets[key].send(data):]
+            while self.client_sockets[key].incomming_messages and self.client_sockets[key].incomming_messages[0]!=None:
+                data=self.client_sockets[key].incomming_messages[0]
+                if data=="disconnect":
+                    self.delete_socket(key)
+                    break
+                self.client_sockets[key].incomming_messages=self.client_sockets[key].incomming_messages[1:]
+                self.client_sockets[key].last_id_received=(self.client_sockets[key].last_id_received+1)%self.client_sockets[key].peer_maxsize
+                while data:   
+                    data=data[self.client_sockets[key].send(data):]
         except KeyError:
             return()
            
@@ -324,7 +371,7 @@ class master():
         try:
             key=iq_to_key(iq['connect_ack'])
         except ValueError:
-            logging.warn('recieved bad port')
+            logging.warn('received bad port')
             return()
             
         if key in self.client_sockets:
@@ -337,7 +384,7 @@ class master():
                 break
                 
         if key0 in self.pending_connections:
-            logging.debug("%s:%d recieved connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
+            logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
             self.peer_resources[key0[1]]=iq['from']
             if iq['connect_ack']['response']=="failure":
                 self.pending_connections[key0].close()
@@ -346,7 +393,7 @@ class master():
                 try:
                     peer_maxsize=int(iq['connect_ack']['response'])
                 except ValueError:
-                    logging.warn("bad result recieved")
+                    logging.warn("bad result received")
                     return()
                 self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0))
                 self.client_sockets[key].peer_maxsize=peer_maxsize
@@ -359,12 +406,17 @@ class master():
 
     def send_data(self, key, data):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("packet"))
+        packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
         
-        data_stanza=ElementTree.Element("data")
+        data_stanza=ElementTree.Element('data')
         data_stanza.text=data
         packet.append(data_stanza)
+
+        id_stanza=ElementTree.Element('id')
+        self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+        id_stanza.text=str(self.client_sockets[key].id)
+        packet.append(id_stanza)
         
         self.send_iq(packet, key, 'set')
 
@@ -373,6 +425,15 @@ class master():
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
+
+        id_stanza=ElementTree.Element('id')
+        if key in self.client_sockets:
+            self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+            id_stanza.text=str(self.client_sockets[key].id)
+        else:
+            id_stanza.text="None"
+        packet.append(id_stanza)
+        
         self.send_iq(packet, key, 'set')
         
     def send_connect_ack(self, key, response):
@@ -460,6 +521,9 @@ class master():
 
     def initialize_client_socket(self, key):
         #just some asyncore initialization stuff
+        self.client_sockets[key].id=0
+        self.client_sockets[key].last_id_received=1
+        self.client_sockets[key].incomming_messages=[]
         self.client_sockets[key].alias_index=0
         self.client_sockets[key].buffer=b''
         self.client_sockets[key].writable=lambda: False
@@ -544,7 +608,7 @@ class master():
                 data=self.client_sockets[key].buffer
                 self.client_sockets[key].buffer=b''
                 if data:                    
-                    self.send_data(key, base64.b64encode(zlib.compress(data, 9)).decode("UTF-8"))
+                    self.send_data(key, base64.b64encode(data).decode("UTF-8"))
             time.sleep(THROTTLE_RATE/float(len(self.bots)))
 
 
