@@ -13,6 +13,9 @@ import math
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 
+import queue
+import copy
+
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
 # throughout SleekXMPP, we will set the default encoding
@@ -26,7 +29,7 @@ else:
 
 THROTTLE_RATE=1.0
 ASYNCORE_LOOP_RATE=0.05
-RECV_RATE=int(2**17*float(ASYNCORE_LOOP_RATE)/THROTTLE_RATE)
+RECV_RATE=2**17*float(ASYNCORE_LOOP_RATE)/THROTTLE_RATE
 
 LOCK=threading.RLock()
 
@@ -90,9 +93,12 @@ def iq_to_key(iq):
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
-        sleekxmpp.ClientXMPP.__init__(self, *jid_password)
-        
         self.master=master
+        sleekxmpp.ClientXMPP.__init__(self, *jid_password)
+
+        #self.scheduler=self.master.scheduler
+        #self.event_queue = self.master.event_queue
+        #self.send_queue = self.master.send_queue      
       
         # gmail xmpp server is actually at talk.google.com
         if jid_password[0].find("@gmail.com")!=-1:
@@ -115,12 +121,6 @@ class bot(sleekxmpp.ClientXMPP):
         self.register_handler(callback.Callback('Hexchat Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
         self.register_handler(callback.Callback('Hexchat Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
         self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error'),self.master.error_handler))
-            
-        # Connect to XMPP server
-        if self.connect(self.connect_address):
-            self.process()
-        else:
-            raise(Exception(jid_password[0]+" could not connect"))    
                   
     ### session management mathods:
 
@@ -171,11 +171,17 @@ class master():
 
         #peer's resources
         self.peer_resources={}
-            
+               
         #initialize the other sleekxmpp clients.
         self.bots=[]
         for jid_password in jid_passwords:
             self.bots.append(bot(self, jid_password))
+
+        for index in range(len(self.bots)):
+            if self.bots[index].connect(self.bots[index].connect_address):
+                self.bots[index].process()
+            else:
+                raise(Exception(self.bots[index].boundjid.bare+" could not connect")) 
 
         self.bot_index=0
 
@@ -406,10 +412,9 @@ class master():
         self.bot_index=(self.bot_index+1)%len(self.bots)
         bot=self.bots[self.bot_index]
         message=bot.Message()
-        #message['from']=bot.boundjid
         message['to']=key[1]
         message['id']='1'
-        message['from']=bot.boundjid
+        message['from']=bot.boundjid.full
         message['type']='chat'
         message.append(packet)
         message.send()
@@ -418,7 +423,7 @@ class master():
         self.bot_index=(self.bot_index+1)%len(self.bots)
         bot=self.bots[self.bot_index]
         iq=bot.Iq()
-        iq['from']=bot.boundjid
+        iq['from']=bot.boundjid.full
         iq['type']=iq_type
         if key in self.client_sockets:
             self.client_sockets[key].alias_index=(self.client_sockets[key].alias_index+1)%len(self.client_sockets[key].aliases)
@@ -460,7 +465,8 @@ class master():
         self.client_sockets[key].writable=lambda: False
         self.client_sockets[key].handle_read=lambda: self.handle_read(key)
         self.client_sockets[key].readable=lambda: True
-        self.client_sockets[key].handle_close=lambda: threading.Thread(name="close %d" % hash(key), target=lambda: self.handle_close(key)).start()
+        self.client_sockets[key].close_thread=False
+        self.client_sockets[key].handle_close=lambda: self.handle_close(key)
         self.client_sockets[key].running=True
         self.client_sockets[key].thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer(key))
         self.client_sockets[key].thread.start()
@@ -482,7 +488,7 @@ class master():
     def handle_read(self, key):
         """Called when a TCP socket has stuff to be read from it."""
         try:
-            data=self.client_sockets[key].recv(RECV_RATE)
+            data=self.client_sockets[key].recv(int(RECV_RATE*float(len(self.bots))))
             self.client_sockets[key].buffer+=data
         except KeyError: #socket got deleted while writing to the buffer
             pass
@@ -507,13 +513,21 @@ class master():
         
     def handle_close(self, key):
         """Called when the TCP client socket closes."""
-        #send a disconnection request to the bot waiting on the other side of the xmpp server
+        
+        if self.client_sockets[key].close_thread:
+            return()
         (local_address, remote_address)=(key[0], key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.send_disconnect(key)
         self.delete_socket(key)
 
     def delete_socket(self, key):
+        if self.client_sockets[key].close_thread:
+            return()
+        self.client_sockets[key].close_thread=threading.Thread(name="close %d" % hash(key), target=lambda: self.close_thread(key))
+        self.client_sockets[key].close_thread.start()
+
+    def close_thread(self, key):  
         with LOCK:
             if not key in self.client_sockets:
                 return()
