@@ -24,11 +24,15 @@ if sys.version_info < (3, 0):
 else:
     raw_input = input
 
-THROTTLE_RATE=1.0
-ASYNCORE_LOOP_RATE=0.05
-RECV_RATE=int(2**17*float(ASYNCORE_LOOP_RATE)/THROTTLE_RATE)
-
-LOCK=threading.RLock()
+#how many seconds before sending the next packet
+#to a given client
+NUM_CACHES=1
+MAX_DATA=2**17 #bytes
+MIN_THROTTLE_RATE=1.0 #seconds
+MAX_THROTTLE_RATE=3.0 #seconds
+ASYNCORE_LOOP_RATE=.1 #seconds
+RECV_RATE=int((MAX_DATA/float(NUM_CACHES))*ASYNCORE_LOOP_RATE/((MIN_THROTTLE_RATE+MAX_THROTTLE_RATE)/2.)) #bytes
+TIMEOUT=MAX_THROTTLE_RATE*NUM_CACHES*2.0 #seconds #not implemented
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -56,6 +60,13 @@ class hexchat_connect_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
     namespace = 'hexchat:connect_ack'
     plugin_attrib = 'connect_ack'
     interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','response'))
+    sub_interfaces=interfaces
+    
+class hexchat_data_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
+    name = 'data_ack'
+    namespace = 'hexchat:data_ack'
+    plugin_attrib = 'data_ack'
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases','id'))
     sub_interfaces=interfaces
 
 class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -113,6 +124,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('message@type=chat/connect_message'),self.master.connect_message_handler))
         self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
         self.register_handler(callback.Callback('Hexchat Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
+        self.register_handler(callback.Callback('Hexchat Result Handler',stanzapath.StanzaPath('iq@type=result/data_ack'),self.master.data_ack_handler))
         self.register_handler(callback.Callback('Hexchat Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
         self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error'),self.master.error_handler))
             
@@ -171,13 +183,45 @@ class master():
 
         #peer's resources
         self.peer_resources={}
+
+        #asyncore socket map
+        self.map={}
             
         #initialize the other sleekxmpp clients.
         self.bots=[]
         for jid_password in jid_passwords:
             self.bots.append(bot(self, jid_password))
 
+        #rate at which to send data over the chat server
+        self.avg_throttle_rate=MIN_THROTTLE_RATE/float(len(self.bots))
+
         self.bot_index=0
+
+        #lock that blocks when deleting a socket
+        self.lock=threading.RLock()
+
+        #asyncore loop
+        self.loop=threading.Thread(target=self.loop)
+        self.loop.start()
+
+    def loop(self):
+        while True:
+            with self.lock:
+                asyncore.loop(0.0, True, count=1, map=self.map)
+            time.sleep(ASYNCORE_LOOP_RATE)
+        
+    def calculate_avg_rates(self):
+        num_sockets=0
+        throttle_rate=0
+        client_sockets=self.client_sockets.copy()
+        for key, client_socket in client_sockets.items():
+            if hasattr(client_socket, "throttle_rate"):
+                throttle_rate+=client_socket.throttle_rate
+                num_sockets+=1
+        if num_sockets>0:
+            self.avg_throttle_rate=float(throttle_rate)/num_sockets
+
+        return(self.avg_throttle_rate)
 
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
@@ -298,16 +342,33 @@ class master():
             return()
 
         try:
+            new_id=int(iq['id'])
+            if new_id<0:
+                raise(ValueError)
+                
+            id_diff=new_id-self.client_sockets[key].last_id_recieved
+            if id_diff<=0 and id_diff>-sys.maxsize/2.:
+                logging.debug("Recieved redundant message")
+                self.send_data_ack(key,str(self.client_sockets[key].last_id_recieved))
+                return()
+            num_new_messages= id_diff % self.client_sockets[key].peer_maxsize
+            #total up the length of each cache sent in the message that we already recieved
+            chunk_lengths=list(map(int, iq['packet']['chunks'].split(",")))
+            num_bytes_to_ignore=sum(chunk_lengths[:-num_new_messages])
             #extract data, ignoring bytes we already recieved
-            data=zlib.decompress(base64.b64decode(iq['packet']['data'].encode("UTF-8")))
+            data=zlib.decompress(base64.b64decode(iq['packet']['data'].encode("UTF-8")))[num_bytes_to_ignore:]
         except (UnicodeDecodeError, TypeError, ValueError):
             logging.warn("%s:%d recieved invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
             #silently disconnect
             self.delete_socket(key)
             return()
+
+        self.client_sockets[key].last_id_recieved=new_id
         
         logging.debug("%s:%d recieved data from " % key[0] + "%s:%d" % key[2])
+        #acknowledge the data was recieved
+        self.send_data_ack(key, iq['id'])
         try:
             while data:    
                 data=data[self.client_sockets[key].send(data):]
@@ -342,12 +403,50 @@ class master():
                 except ValueError:
                     logging.warn("bad result recieved")
                     return()
-                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0))
+                self.client_sockets[key] = asyncore.dispatcher(self.pending_connections.pop(key0), map=self.map)
                 self.client_sockets[key].peer_maxsize=peer_maxsize
                 self.client_sockets[key].aliases=iq['connect_ack']['aliases'].split(',')
                 self.initialize_client_socket(key)
         else:
             logging.warn('iq not in pending connections')
+
+    def data_ack_handler(self, iq):
+        try:
+            key=iq_to_key(iq['data_ack'])
+        except ValueError:
+            logging.warn('recieved bad port')
+            return()
+            
+        if not key in self.client_sockets:
+            logging.warn("%s:%d recieved data_ack from " % key[0] + "%s:%d, but is not connected." % key[2])
+            return()
+            
+        try:
+            response_id=int(iq['data_ack']['id'])
+        except ValueError:
+            logging.warn("bad result")
+            return()
+                
+        if response_id<0:
+            logging.warn("negative response id recieved")
+            return()
+                
+        cache_depth=len(self.client_sockets[key].cache_lengths)
+        num_caches_to_clear=cache_depth-((self.client_sockets[key].id-response_id) % sys.maxsize)
+        if num_caches_to_clear>0:
+
+            #adjust throttle rate
+            new_throttle_rate=time.time()-self.client_sockets[key].cache_time[num_caches_to_clear-1]
+            self.adjust_throttle_rate(key, new_throttle_rate)
+            #data has been acknowledged
+            #clear the cache
+            logging.debug("clearing %d caches" % (num_caches_to_clear))
+            self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[num_caches_to_clear:]
+            cache_data_length=sum(self.client_sockets[key].cache_lengths[:num_caches_to_clear])
+            self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[cache_data_length:]
+            self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[num_caches_to_clear:]
+        else:
+            logging.debug("data_ack recieved from invalid id. Recieved response that would clear %d caches. Cached %d packets." % (num_caches_to_clear, cache_depth))
 
     #methods for sending xml
 
@@ -360,6 +459,11 @@ class master():
         data_stanza.text=data
         packet.append(data_stanza)
         
+        chunks_stanza=ElementTree.Element('chunks')
+        chunks=list(map(str, self.client_sockets[key].cache_lengths))
+        chunks_stanza.text=",".join(chunks)
+        packet.append(chunks_stanza)
+        
         self.send_iq(packet, key, 'set')
 
     def send_disconnect(self, key):
@@ -369,6 +473,16 @@ class master():
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
         
+    def send_data_ack(self, key, ack_id):
+        (local_address, remote_address)=(key[0], key[2])
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("data_ack"))
+        packet.attrib['xmlns']='hexchat:data_ack'
+        ack_id_stanza=ElementTree.Element("id")
+        ack_id_stanza.text=ack_id
+        packet.append(ack_id_stanza)
+        logging.debug("%s:%d" % local_address + " sending data_ack signal to %s:%d" % remote_address)
+        self.send_iq(packet, key, 'result')
+
     def send_connect_ack(self, key, response):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
@@ -421,6 +535,7 @@ class master():
         iq['from']=bot.boundjid
         iq['type']=iq_type
         if key in self.client_sockets:
+            iq['id']=str(self.client_sockets[key].id)
             self.client_sockets[key].alias_index=(self.client_sockets[key].alias_index+1)%len(self.client_sockets[key].aliases)
             iq['to']=self.client_sockets[key].aliases[self.client_sockets[key].alias_index]
         else:
@@ -448,7 +563,7 @@ class master():
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
-        self.client_sockets[key] = asyncore.dispatcher(connected_socket)
+        self.client_sockets[key] = asyncore.dispatcher(connected_socket, map=self.map)
         self.client_sockets[key].aliases=list(key[1])
         self.initialize_client_socket(key)
         self.send_connect_ack(key, str(sys.maxsize))
@@ -457,10 +572,17 @@ class master():
         #just some asyncore initialization stuff
         self.client_sockets[key].alias_index=0
         self.client_sockets[key].buffer=b''
+        self.client_sockets[key].id=0
+        self.client_sockets[key].last_id_recieved=0
+        self.client_sockets[key].cache_time=[]
+        self.client_sockets[key].cache_lengths=[]
+        self.client_sockets[key].cache_data=b''
         self.client_sockets[key].writable=lambda: False
         self.client_sockets[key].handle_read=lambda: self.handle_read(key)
         self.client_sockets[key].readable=lambda: True
-        self.client_sockets[key].handle_close=lambda: threading.Thread(name="close %d" % hash(key), target=lambda: self.handle_close(key)).start()
+        self.client_sockets[key].handle_close=lambda: threading.Thread(target=lambda: self.handle_close(key)).start()
+        self.client_sockets[key].throttle_rate=self.calculate_avg_rates()
+        self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
         self.client_sockets[key].running=True
         self.client_sockets[key].thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer(key))
         self.client_sockets[key].thread.start()
@@ -468,7 +590,7 @@ class master():
     def add_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
         self.bot_index=(self.bot_index+1)%len(self.bots)
-        self.server_sockets[local_address] = asyncore.dispatcher()
+        self.server_sockets[local_address] = asyncore.dispatcher(map=self.map)
         #just some asyncore initialization stuff
         self.server_sockets[local_address].create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sockets[local_address].writable=lambda: False
@@ -482,7 +604,7 @@ class master():
     def handle_read(self, key):
         """Called when a TCP socket has stuff to be read from it."""
         try:
-            data=self.client_sockets[key].recv(RECV_RATE)
+            data=self.client_sockets[key].recv(self.client_sockets[key].recv_rate)
             self.client_sockets[key].buffer+=data
         except KeyError: #socket got deleted while writing to the buffer
             pass
@@ -507,31 +629,55 @@ class master():
         
     def handle_close(self, key):
         """Called when the TCP client socket closes."""
-        #send a disconnection request to the bot waiting on the other side of the xmpp server
-        (local_address, remote_address)=(key[0], key[2])
-        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.send_disconnect(key)
-        self.delete_socket(key)
+        with self.lock:          
+            #send a disconnection request to the bot waiting on the other side of the xmpp server
+            (local_address, remote_address)=(key[0], key[2])
+            logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+            self.send_disconnect(key)
+            self.delete_socket(key)
 
     def delete_socket(self, key):
-        with LOCK:
+        with self.lock:
             if not key in self.client_sockets:
                 return()
-            self.client_sockets[key].close()
             self.client_sockets[key].running=False
             while self.client_sockets[key].thread.is_alive():
-                time.sleep(THROTTLE_RATE/float(len(self.bots)))
+                time.sleep(self.client_sockets[key].throttle_rate)
+            self.client_sockets[key].close()
             del(self.client_sockets[key])
 
     #check client sockets for buffered data
     def check_data_buffer(self, key):
         while self.client_sockets[key].running:
-            if self.client_sockets[key].buffer:
+            if self.client_sockets[key].buffer or self.client_sockets[key].cache_data:
                 data=self.client_sockets[key].buffer
                 self.client_sockets[key].buffer=b''
-                if data:                    
-                    self.send_data(key, base64.b64encode(zlib.compress(data, 9)).decode("UTF-8"))
-            time.sleep(THROTTLE_RATE/float(len(self.bots)))
+                if data:
+                    self.client_sockets[key].cache_lengths.append(len(data))
+                    self.client_sockets[key].cache_data+=data
+                    while len(self.client_sockets[key].cache_data)>MAX_DATA:
+                        logging.debug("garbage collecting cache")
+                        num_garbage_bytes=len(self.client_sockets[key].cache_data)-MAX_DATA
+                        if num_garbage_bytes>=self.client_sockets[key].cache_lengths[0]:
+                            self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[self.client_sockets[key].cache_lengths[0]:]
+                            self.client_sockets[key].cache_time=self.client_sockets[key].cache_time[1:]
+                            self.client_sockets[key].cache_lengths=self.client_sockets[key].cache_lengths[1:]
+                        else:
+                            self.client_sockets[key].cache_lengths[0]-=num_garbage_bytes
+                            self.client_sockets[key].cache_data=self.client_sockets[key].cache_data[num_garbage_bytes:]                         
+                        
+                    self.client_sockets[key].id=(self.client_sockets[key].id+1)%sys.maxsize
+                    self.client_sockets[key].cache_time.append(time.time())
+                        
+                self.send_data(key, base64.b64encode(zlib.compress(self.client_sockets[key].cache_data, 9)).decode("UTF-8"))
+            time.sleep(self.client_sockets[key].throttle_rate)
+
+    def adjust_throttle_rate(self, key, new_throttle_rate):
+        rescaled_throttle_rate=MIN_THROTTLE_RATE+math.atan(new_throttle_rate*2./(MIN_THROTTLE_RATE+MAX_THROTTLE_RATE))*2.*(MAX_THROTTLE_RATE-MIN_THROTTLE_RATE)/math.pi
+        self.client_sockets[key].throttle_rate=rescaled_throttle_rate
+        logging.debug("Throttle rate readjusted to %f" % (self.client_sockets[key].throttle_rate)) 
+        self.client_sockets[key].recv_rate=int(MAX_DATA/float(NUM_CACHES)*ASYNCORE_LOOP_RATE/self.client_sockets[key].throttle_rate)
+        logging.debug("Recv rate readjusted to %d" % (self.client_sockets[key].recv_rate))
 
 
 
@@ -539,6 +685,7 @@ if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
     
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_data_ack)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_iq)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect_message)
@@ -585,6 +732,4 @@ if __name__ == '__main__':
 
     #program needs to be kept running on linux
     while True:
-        with LOCK:
-            asyncore.loop(0.0, True, count=1)
-        time.sleep(ASYNCORE_LOOP_RATE)
+        time.sleep(1)

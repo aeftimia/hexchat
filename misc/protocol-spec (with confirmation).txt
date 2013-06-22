@@ -35,17 +35,45 @@ If the response stanza reads "failure" it closes the socket in the pending conne
 4. Data Exchange
 a. Data is read from a socket
 i)	Data is read from a socket and added to a buffer, which is periodically checked.
-ii) 	All buffered data is compressed, base 64 encoded, and put in a "data" stanza. The buffer is then cleared
+ii)	When data is found in the buffer or the cache, the buffered data is added to the cached data, the length of the buffered data (if greater than zero) is appended to a separate list of cache lengths, and the current time is appended to a list of timestamps. The buffer is then cleared.
+ii) 	All cached data is compressed, base 64 encoded, and put in a "data" stanza.
 iii)	All the lengths of each cache is comma separated in a "chunks" stanza.
-iv)	A header is constructed and appended to the "packet" stanza with its xmlns set to "hexchat:packet".
-v)	The recipient of the message is selected from the list of aliases provided in the header during the connection process. Specifically, the bot rotates through each entry of this list every time an IQ is sent.
-vi)	The sender of the message is selected from a list of accounts connected to the chat server. Specifically, the bot rotates through each each of its connected accounts each time it sends any kind of message. 
-vii)	The message is sent over the chat server 
+iv)	An IQ message is created with its type set to "set", its xmlns set to "hexchat:packet", and its id set to the following quantity: ((the id of the last IQ sent that contained data) + 1) mod sys.maxsize
+v)	The "data" and chunk" stanzas are appended to the IQ message in a "packet" stanza.
+vi)	A header is constructed and appended to the "packet" stanza.
+vii)	The recipient of the message is selected from the list of aliases provided in the header during the connection process. Specifically, the bot rotates through each entry of this list every time an IQ is sent.
+viii)	The sender of the message is selected from a list of accounts connected to the chat server. Specifically, the bot rotates through each each of its connected accounts each time it sends any kind of message. 
+ix)	The message is sent over the chat server 
 
 b. Data is recieved from the chat server
 i)	The bot constructs a key from the header. If the key is found in its routing table, it proceeds to (ii). Otherwise, it sends a disconnect request (see part 5).
-ii)	The data is decoded from base 64, and unzipped while discarding the number of bytes computed in (d).
-iii)	The data is sent to the appropriate socket.
+ii)	The bot computes the quantity: "id of the IQ stanza" - "last id received with the same header". Call this quantity "id_diff"
+iii)	If id_diff<=0 and id_diff>=-"sender's sys.maxsize"/2, then the message is declared redundant and a confirmation is sent regarding the id of the IQ containing the most recent data (i.e. *not* the id of the message that was just received). Otherwise, the bot moves on to (iv)
+iv)	id_diff mod "peer's sys.maxsize" is computed. The result represents the number of new chunks of data.
+v)	The number of bytes of data to ignore is computed from the number of new chunks of data computed in (iv) and the list of chunk sizes in the "chunks" stanza.
+vi)	The data is decoded from base 64, and unzipped while discarding the number of bytes computed in (d).
+vii)    A confirmation message is sent. This message is an IQ with its type set to "result". The IQ stanza contains another stanza called "data_ack" with its xmlns set to "hexchat:data_ack". Inside the "data_ack" stanza is a stanza called "id" which contains the id of the IQ message recieved.
+viii)	The data is sent to the appropriate socket.
+
+c. An acknowledgement of data is recieved
+i)	The bot constructs a key from the header. If the key is found in its routing table, it proceeds to (ii).
+ii)	The bot computes the quantity: "number in response stanza" - "id of last message sent that contained data" mod sys.maxsize.
+iii)	The bot subtracts the quantity computed in (ii) from the number of caches stored. If this quantity is positive, the bot moves on to (iv)
+iv)	Compute the difference between the current time stamp and the time stamp recorded "result of (iii)" - 1 records ago.
+v)	Set the new throttle rate (rate at which the socket's buffer and caches are checked) to F(result of (iv)), where
+        F(x)=MIN THROTTLE RATE + arctan(x * 2 / (MIN THROTTLE RATE + MAX THROTTLE RATE)) * 2 * (MAX THROTTLE RATE-MIN THROTTLE RATE) / Pi
+	, where:
+	MIN THROTTLE RATE	= The minimum time any one JID should wait between sending messages to the same recipient = 1.0 seconds (this value seems to work well)
+	MAX THROTTLE RATE	= The maximum time any one JID should wait between sending messages to the same recipient = 3.0 seconds (this value seems to work well)
+	Pi			=3.14... 
+        The function, F, rescales the throttle rate so that it never goes above MAX THROTTLE RATE or below MIN THROTTLE RATE
+vi)	The maximum number of bytes the socket reads at any given recv call adjusted so that garbage collection need not happen for a certain minimum amount of time. This 		is given by:
+	recv rate =  floor(MAX DATA/NUM CACHES * ASYNCORE LOOP RATE/throttle rate)
+	, where:
+	MAX DATA  	   = maximum data that can be sent over the chat server at once (seems to be within a factor of 2 of 2^17 bytes)
+	NUM CACHES	   = minimum number of caches MAX DATA should be distributed over. This should be a small integer. (1 is fine)
+	ASYNCORE LOOP RATE = The rate at which the socket is polled (can be anywhere between 0.001 and 0.1 seconds)
+vii)	The appropriate number of caches are cleared along with their recorded data lengths and time stamps (see 4a).
 
 5. Disconnecting
 a. A socket closes
