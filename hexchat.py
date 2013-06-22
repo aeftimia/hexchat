@@ -286,11 +286,12 @@ class master():
             self.delete_socket(key) 
             return()
 
-        id_diff=(iq_id-self.client_sockets[key].last_id_received)%self.client_sockets[key].peer_maxsize
+        id_diff=iq_id-self.client_sockets[key].last_id_received
         if id_diff<0 and id_diff>-self.client_sockets[key].peer_maxsize/2.:
             logging.warn("received redundant message")
             return()
-            
+
+        id_diff=id_diff%self.client_sockets[key].peer_maxsize
         while id_diff>=len(self.client_sockets[key].incomming_messages):
             self.client_sockets[key].incomming_messages.append(None)
 
