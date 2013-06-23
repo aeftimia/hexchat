@@ -28,8 +28,6 @@ ASYNCORE_LOOP_RATE=0.1
 RECV_RATE=2**17*float(ASYNCORE_LOOP_RATE)/THROTTLE_RATE
 MAX_ID=2**32-1
 
-LOCK=threading.RLock()
-
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
     namespace = 'hexchat:disconnect'
@@ -37,17 +35,10 @@ class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     interfaces = set(('local_ip','local_port','remote_ip','remote_port', 'aliases','id'))
     sub_interfaces=interfaces
 
-class hexchat_connect_message(sleekxmpp.xmlstream.stanzabase.ElementBase):
+class hexchat_connect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'connect'
-    namespace = 'hexchat:connect_message'
-    plugin_attrib = 'connect_message'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases'))
-    sub_interfaces=interfaces
-
-class hexchat_connect_iq(sleekxmpp.xmlstream.stanzabase.ElementBase):
-    name = 'connect'
-    namespace = 'hexchat:connect_iq'
-    plugin_attrib = 'connect_iq'
+    namespace = 'hexchat:connect'
+    plugin_attrib = 'connect'
     interfaces = set(('local_ip','local_port','remote_ip','remote_port','aliases'))
     sub_interfaces=interfaces
 
@@ -69,7 +60,7 @@ class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
 def iq_to_key(iq):
-    if len(iq['remote_port'])>len("success") or len(iq['local_port'])>len("success"):
+    if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
         #these ports are way too long
         raise(ValueError)
         
@@ -112,12 +103,14 @@ class bot(sleekxmpp.ClientXMPP):
         #self.register_plugin('xep_0045')
             
         #these handle the custom iq stanzas
-        self.register_handler(callback.Callback('Hexchat Connection Handler',stanzapath.StanzaPath('iq@type=set/connect_iq'),self.master.connect_iq_handler))
-        self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('message@type=chat/connect_message'),self.master.connect_message_handler))
-        self.register_handler(callback.Callback('Hexchat Message Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
-        self.register_handler(callback.Callback('Hexchat Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
-        self.register_handler(callback.Callback('Hexchat Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
-        self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error'),self.master.error_handler))
+        self.register_handler(callback.Callback('Connection Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
+        self.register_handler(callback.Callback('Message Handler',stanzapath.StanzaPath('message@type=chat/connect'),self.master.connect_handler))
+        self.register_handler(callback.Callback('Connect Ack Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
+        self.register_handler(callback.Callback('Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
+        self.register_handler(callback.Callback('Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
+        
+        self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error/error'), self.master.error_handler))
+        self.register_handler(callback.Callback('Message Error Handler',stanzapath.StanzaPath('message@type=error/error'),self.master.error_handler))
                   
     ### session management mathods:
 
@@ -260,13 +253,18 @@ class master():
             if self.bots[index].connect(self.bots[index].connect_address):
                 self.bots[index].process()
             else:
-                raise(Exception(self.bots[index].boundjid.bare+" could not connect")) 
+                raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
 
         self.bot_index=0
-
         self.lock=threading.Lock()
         #asyncore map
         self.map={}
+
+        while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
+            time.sleep(ASYNCORE_LOOP_RATE)
+
+        self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+
         self.loop_thread=threading.Thread(name=",".join(map(lambda bot: bot.boundjid.full, self.bots)), target=lambda: self.asyncore_loop())
         self.loop_thread.start()
 
@@ -275,6 +273,7 @@ class master():
             with self.lock:
                 asyncore.loop(0.0, True, count=1, map=self.map)
             time.sleep(ASYNCORE_LOOP_RATE)
+            
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
         local_ip_stanza=ElementTree.Element("local_ip")
@@ -294,7 +293,7 @@ class master():
         xml.append(remote_port_stanza)
 
         aliases_stanza=ElementTree.Element("aliases")
-        aliases_stanza.text=",".join(map(lambda bot: bot.boundjid.full, self.bots))
+        aliases_stanza.text=",".join(self.aliases)
         xml.append(aliases_stanza)
         
         return(xml)
@@ -302,40 +301,39 @@ class master():
     #incomming xml handlers
 
     def error_handler(self, iq):
-        pass
+        with self.lock:
+            try:
+                del(self.peer_resources[iq['from'].bare])
+            except KeyError:
+                pass
 
-    def connect_iq_handler(self, iq):
+            try:
+                self.pending_connections[iq['from'].bare].close()
+                del(self.pending_connections[iq['from'].bare])
+            except KeyError:
+                pass
+            
+            for key in self.client_sockets:
+                if iq['from'] in key[1]:
+                    if len(self.client_sockets[key].aliases)>1:
+                        self.client_sockets[key].aliases=list(key[1]-frozenset([iq['from']]))
+                    else:
+                        self.delete_socket(key)
+
+    def connect_handler(self, msg):          
         try:
-            key=iq_to_key(iq['connect_iq'])
+            key=iq_to_key(msg['connect'])
         except ValueError:
             logging.warn('received bad port')
             return()
 
         if key in self.client_sockets:
             logging.warn("connection request received from a connected socket")   
-            return()
-                
-        self.initiate_connection(*key)
-        if key in self.client_sockets:
-            self.client_sockets[key].aliases=iq['connect_iq']['aliases'].split(',')
-
-    def connect_message_handler(self, msg):
-        if not msg['to'] in map(lambda bot: bot.boundjid.bare, self.bots):
             return()
             
-        try:
-            key=iq_to_key(msg['connect_message'])
-        except ValueError:
-            logging.warn('received bad port')
-            return()
-
+        self.initiate_connection(key, msg['to'])
         if key in self.client_sockets:
-            logging.warn("connection request received from a connected socket")   
-            return()
-                
-        self.initiate_connection(*key)
-        if key in self.client_sockets:
-            self.client_sockets[key].aliases=msg['connect_message']['aliases'].split(',')            
+            self.client_sockets[key].aliases=msg['connect']['aliases'].split(',')            
 
     def disconnect_handler(self, iq):
         """Handles incoming xmpp iqs for disconnections"""
@@ -449,26 +447,23 @@ class master():
         except ValueError:
             logging.warn('received bad port')
             return()
-            
-        if key in self.client_sockets:
+
+        key0=(key[0], iq['from'].bare, key[2])
+        if not key0 in self.pending_connections:
             logging.debug("key not found in sockets or pending connections")
             return()
-
-        for alias in key[1]:
-            key0=(key[0], sleekxmpp.xmlstream.JID(alias).bare, key[2])
-            if key0 in self.pending_connections:
-                break
                 
-        if key0 in self.pending_connections:
-            logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
-            self.peer_resources[key0[1]]=iq['from']
-            if iq['connect_ack']['response']=="failure":
-                self.pending_connections[key0].close()
-                del(self.pending_connections[key0])
-            else:
-                self.create_client_socket(key, self.pending_connections.pop(key0))
-        else:
+        if not key0 in self.pending_connections:
             logging.warn('iq not in pending connections')
+            return()
+            
+        logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
+        self.peer_resources[key0[1]]=iq['from']
+        if iq['connect_ack']['response']=="failure":
+            self.pending_connections[key0].close()
+            del(self.pending_connections[key0])
+        else:
+            self.create_client_socket(key, self.pending_connections.pop(key0))
 
     #methods for sending xml
 
@@ -504,7 +499,7 @@ class master():
         
         self.send_iq(packet, key, 'set')
         
-    def send_connect_ack(self, key, response):
+    def send_connect_ack(self, key, response, to):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
         packet.attrib['xmlns']="hexchat:connect_ack"
@@ -512,19 +507,19 @@ class master():
         response_stanza.text=response
         packet.append(response_stanza)
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
-        self.send_iq(packet, key, 'result')
+        self.send_iq(packet, key, 'result', to)
 
     def send_connect_iq(self, key):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
-        packet.attrib['xmlns']="hexchat:connect_iq"
+        packet.attrib['xmlns']="hexchat:connect"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
         
     def send_connect_message(self, key):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
-        packet.attrib['xmlns']="hexchat:connect_message"
+        packet.attrib['xmlns']="hexchat:connect"
         
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
         self.bot_index=(self.bot_index+1)%len(self.bots)
@@ -537,9 +532,16 @@ class master():
         message.append(packet)
         message.send()
 
-    def send_iq(self, packet, key, iq_type):
-        self.bot_index=(self.bot_index+1)%len(self.bots)
-        bot=self.bots[self.bot_index]
+    def send_iq(self, packet, key, iq_type, to=None):
+        if to==None:
+            self.bot_index=(self.bot_index+1)%len(self.bots)
+            bot=self.bots[self.bot_index]
+        else: #this section is for sending connect_acks. 
+              #we want to respond with the same bot that recieved the connect request
+              #this helps prevent a man-in-the-middle attack
+              #in which someone intercepts a message
+              #and responds with a connect_ack from a different JID
+            bot=[bot for bot in self.bots if bot.boundjid.bare==to.bare][0]
         iq=bot.Iq()
         iq['from']=bot.boundjid.full
         iq['type']=iq_type
@@ -556,23 +558,23 @@ class master():
 
     ### Methods for connection/socket creation.
 
-    def initiate_connection(self, local_address, peer, remote_address):
+    def initiate_connection(self, key, to):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
         
-        key=(local_address, peer, remote_address)
+        (local_address, peer, remote_address)=key
         try: # connect to the ip:port
             logging.debug("trying to connect to %s:%d" % local_address)
             connected_socket=socket.create_connection(local_address, timeout=2.0)
         except (socket.error, OverflowError, ValueError):
             logging.warning("could not connect to %s:%d" % local_address)
             #if it could not connect, tell the bot on the the other it could not connect
-            self.send_connect_ack(key, "failure")
+            self.send_connect_ack(key, "failure", to)
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         # attach the socket to the appropriate client_sockets and fix asyncore methods
         self.create_client_socket(key, connected_socket)
-        self.send_connect_ack(key, "success")
+        self.send_connect_ack(key, "success", to)
 
     def create_client_socket(self, key, socket):
         threading.Thread(name="create client socket %d" % hash(key), target=lambda: self.create_client_socket_thread(key, socket)).start()
@@ -609,10 +611,10 @@ if __name__ == '__main__':
     
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
-    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_iq)
-    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect_message)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_ack)
-        
+
     if sys.argv[1]=="-c":
         #room=sys.argv[3]
         index=3
