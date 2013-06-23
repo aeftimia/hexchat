@@ -263,6 +263,8 @@ class master():
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
             time.sleep(ASYNCORE_LOOP_RATE)
 
+        self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+
         self.loop_thread=threading.Thread(name=",".join(map(lambda bot: bot.boundjid.full, self.bots)), target=lambda: self.asyncore_loop())
         self.loop_thread.start()
 
@@ -273,7 +275,7 @@ class master():
             time.sleep(ASYNCORE_LOOP_RATE)
             
     #turn local address and remote address into xml stanzas in the given element tree
-    def format_header(self, local_address, remote_address, xml, key):       
+    def format_header(self, local_address, remote_address, xml):       
         local_ip_stanza=ElementTree.Element("local_ip")
         local_ip_stanza.text=local_address[0]
         xml.append(local_ip_stanza)      
@@ -291,7 +293,7 @@ class master():
         xml.append(remote_port_stanza)
 
         aliases_stanza=ElementTree.Element("aliases")
-        aliases_stanza.text=",".join(map(lambda bot: bot.boundjid.full, self.bots))
+        aliases_stanza.text=",".join(self.aliases)
         xml.append(aliases_stanza)
         
         return(xml)
@@ -467,7 +469,7 @@ class master():
 
     def send_data(self, key, data):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'), key)
+        packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
         
         data_stanza=ElementTree.Element('data')
@@ -483,7 +485,7 @@ class master():
 
     def send_disconnect(self, key):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"), key)
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
 
@@ -499,7 +501,7 @@ class master():
         
     def send_connect_ack(self, key, response, to):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"), key)
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
         packet.attrib['xmlns']="hexchat:connect_ack"
         response_stanza=ElementTree.Element("response")
         response_stanza.text=response
@@ -509,14 +511,14 @@ class master():
 
     def send_connect_iq(self, key):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"), key)
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
         self.send_iq(packet, key, 'set')
         
     def send_connect_message(self, key):
         (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"), key)
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
