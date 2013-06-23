@@ -347,11 +347,7 @@ class master():
             logging.warn("%s:%d" % key[2] + " seemed to forge a disconnect to %s:%d." % key[0])
             return()
             
-        #client wants to disconnect 
-        if not self.client_sockets[key].incomming_messages:
-            logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
-            self.delete_socket(key)     
-                 
+        #client wants to disconnect                    
         try:
             iq_id=int(iq['disconnect']['id'])
         except ValueError:
@@ -365,10 +361,15 @@ class master():
             return()
 
         id_diff=id_diff%MAX_ID
+        
         while id_diff>=len(self.client_sockets[key].incomming_messages):
             self.client_sockets[key].incomming_messages.append(None)
 
         self.client_sockets[key].incomming_messages[id_diff]="disconnect"
+
+        if self.client_sockets[key].incomming_messages[0]=="disconnect":
+            logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
+            self.delete_socket(key)  
             
                     
     def data_handler(self, iq):
@@ -407,7 +408,7 @@ class master():
 
         id_diff=(iq_id-self.client_sockets[key].last_id_received)%MAX_ID
         if id_diff<0 and id_diff>-MAX_ID/2.:
-            logging.warn("recived redundant message")
+            logging.warn("received redundant message")
             return()
 
         try:
@@ -432,6 +433,7 @@ class master():
             while self.client_sockets[key].incomming_messages and self.client_sockets[key].incomming_messages[0]!=None:
                 data=self.client_sockets[key].incomming_messages[0]
                 if data=="disconnect":
+                    logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
                     self.delete_socket(key)
                     break
                 self.client_sockets[key].incomming_messages=self.client_sockets[key].incomming_messages[1:]
