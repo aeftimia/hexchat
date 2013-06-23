@@ -44,7 +44,7 @@ vi)	The sender of the message is selected from a list of accounts connected to t
 vii)	The message is sent over the chat server 
 
 b. Data is recieved from the chat server
-i)	The bot constructs a key from the header. If the key is found in its routing table, it proceeds to (ii). Otherwise, it sends a disconnect request (see part 5).
+i)	The bot constructs a key from the header. If the key is found in its routing table, it proceeds to (ii).
 ii)	The bot checks that the message's "id" stanza conantains a valid id and computes the following quantity:
 	"new id" - "last id that recieved that resulted in writing data"
 iii)	If the quantity computed in (ii) is NOT less than zero but greater than -1 * (2^32-1)/2 move on to (iii). Otherwise, the message is declared redundant.

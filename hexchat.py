@@ -85,7 +85,7 @@ class bot(sleekxmpp.ClientXMPP):
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
         self.__event_handlers_lock = self.master.event_handlers_lock
         #self.scheduler=self.master.scheduler
-        self.event_queue = self.master.event_queue
+        #self.event_queue = self.master.event_queue
         #self.send_queue = self.master.send_queue      
       
         # gmail xmpp server is actually at talk.google.com
@@ -368,7 +368,6 @@ class master():
         self.client_sockets[key].incomming_messages[id_diff]="disconnect"
 
         if self.client_sockets[key].incomming_messages[0]=="disconnect":
-            logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
             self.delete_socket(key)  
             
                     
@@ -394,9 +393,6 @@ class master():
             #the disconnect process
             if iq['packet']['data']:
                 logging.warn("%s:%d received data from " % key[0] + "%s:%d, but is not connected." % key[2])
-                #this could be because the disconnect signal was dropped by the chat server
-                #send a disconnect again
-                self.send_disconnect(key)
             return()
 
         try:
@@ -433,9 +429,8 @@ class master():
             while self.client_sockets[key].incomming_messages and self.client_sockets[key].incomming_messages[0]!=None:
                 data=self.client_sockets[key].incomming_messages[0]
                 if data=="disconnect":
-                    logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
                     self.delete_socket(key)
-                    break
+                    return()
                 self.client_sockets[key].incomming_messages=self.client_sockets[key].incomming_messages[1:]
                 self.client_sockets[key].last_id_received=(self.client_sockets[key].last_id_received+1)%MAX_ID
                 while data:   
@@ -606,6 +601,7 @@ class master():
             while self.client_sockets[key].run_thread.is_alive():
                 time.sleep(THROTTLE_RATE/float(len(self.bots)))
             del(self.client_sockets[key])
+            logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
 
 if __name__ == '__main__':
