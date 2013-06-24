@@ -348,9 +348,9 @@ class master():
                 pass
             
             for key in self.client_sockets:
-                if iq['from'].full in key[1]:
+                if iq['from'].full in self.client_sockets[key].aliases:
                     if len(self.client_sockets[key].aliases)>1:
-                        self.client_sockets[key].aliases=list(key[1]-frozenset([iq['from'].full]))
+                        self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
                     else:
                         self.delete_socket(key)
 
