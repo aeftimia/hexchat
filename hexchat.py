@@ -194,9 +194,6 @@ class client_socket(asyncore.dispatcher):
 
     def handle_close(self):
         """Called when the TCP client socket closes."""
-        with self.close_lock:
-            if self.close_thread:
-                return()
         (local_address, remote_address)=(self.key[0], self.key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.master.send_disconnect(self.key)
