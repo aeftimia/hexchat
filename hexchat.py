@@ -155,7 +155,7 @@ class client_socket(asyncore.dispatcher):
         asyncore.dispatcher.__init__(self, socket, map=self.master.map)
 
     def readable(self):
-        with self.lock:
+        with self.close_lock:
             return(not self.close_thread)
 
     def writable(self):
