@@ -148,19 +148,16 @@ class client_socket(asyncore.dispatcher):
         self.write_lock=threading.Lock()
         socket.setblocking(1)
         self.socket=socket
-        self.run_thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer())
+        self.run_thread=threading.Thread(name="read socket %d" % hash(key), target=lambda: self.read_socket())
 
     #check client sockets for buffered data
-    def check_data_buffer(self):
+    def read_socket(self):
         while True:
             data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
-            with self.lock:
-                if not self.running:
-                    return()
-                if data:                   
-                    self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
-                else:
-                    return()
+            if data:                   
+                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
+            else:
+                return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
 
     def read_messages(self, iq_id, data):
@@ -196,8 +193,10 @@ class client_socket(asyncore.dispatcher):
         """Called when the TCP client socket closes."""
         (local_address, remote_address)=(self.key[0], self.key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.master.send_disconnect(self.key)
-        self.master.delete_socket(self.key)
+        with self.lock:
+            if self.running:
+                self.master.send_disconnect(self.key)
+                self.master.delete_socket(self.key)
 
     def close(self):
         #self.connected = False
@@ -225,14 +224,9 @@ class server_socket(asyncore.dispatcher):
 
     def accept_thread(self):
         while True:
-            self.handle_accept()
-
-    def handle_accept(self):
-        """Called when we have a new incoming connection to one of our listening sockets."""
-        
-        connection, local_address = self.accept()
-        thread=threading.Thread(name="%s:%d" % local_address + " accepted by %s:%d" % self.local_address, target=lambda: self.handle_accept_thread(local_address, connection))
-        thread.start()
+            connection, local_address = self.accept()
+            thread=threading.Thread(name="%s:%d" % local_address + " accepted by %s:%d" % self.local_address, target=lambda: self.handle_accept_thread(local_address, connection))
+            thread.start()
 
     def handle_accept_thread(self, local_address, connection):
         with self.master.lock:
@@ -439,7 +433,7 @@ class master():
             return()
             
         logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
-        self.peer_resources[key0[1]]=iq['from']
+        self.peer_resources[key0[1]]=iq['from'].full
         if iq['connect_ack']['response']=="failure":
             self.pending_connections[key0].close()
             del(self.pending_connections[key0])
@@ -588,11 +582,8 @@ class master():
             time.sleep(THROTTLE_RATE)
                
         with self.client_sockets[key].lock:
-            self.client_sockets[key].close()
             self.client_sockets[key].running=False
-            
-        while self.client_sockets[key].run_thread.is_alive():
-            time.sleep(THROTTLE_RATE/float(len(self.bots)))
+            self.client_sockets[key].close()
                 
         with self.lock:
             del(self.client_sockets[key])
