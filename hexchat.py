@@ -11,7 +11,6 @@ import xml.etree.cElementTree as ElementTree
 import math
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
-import queue
 
 # Python versions before 3.0 do not use UTF-8 encoding
 # by default. To ensure that Unicode is handled properly
@@ -24,8 +23,7 @@ else:
     raw_input = input
 
 THROTTLE_RATE=1.0
-ASYNCORE_LOOP_RATE=0.1
-RECV_RATE=2**17*float(ASYNCORE_LOOP_RATE)/THROTTLE_RATE
+RECV_RATE=2**17
 MAX_ID=2**32-1
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -147,34 +145,21 @@ class client_socket(asyncore.dispatcher):
         self.close_thread=False
         self.running=True
         self.lock=threading.Lock()
-        self.read_lock=threading.Lock()
         self.write_lock=threading.Lock()
-        self.close_lock=threading.Lock()
+        socket.setblocking(1)
+        self.socket=socket
         self.run_thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer())
-        self.run_thread.start()
-        asyncore.dispatcher.__init__(self, socket, map=self.master.map)
-
-    def readable(self):
-        with self.close_lock:
-            return(not self.close_thread)
-
-    def writable(self):
-        return(False)
-
-    def handle_read(self):
-        """Called when a TCP socket has stuff to be read from it."""
-        with self.read_lock:
-            self.buffer+=self.recv(int(RECV_RATE*float(len(self.master.bots))))
 
     #check client sockets for buffered data
     def check_data_buffer(self):
         while True:
-            with self.lock and self.read_lock:
-                if self.buffer:
-                    data=self.buffer
-                    self.buffer=b''                   
+            data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
+            with self.lock:
+                if not self.running:
+                    return()
+                if data:                   
                     self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
-                elif not self.running:
+                else:
                     return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
 
@@ -217,17 +202,33 @@ class client_socket(asyncore.dispatcher):
         self.master.send_disconnect(self.key)
         self.master.delete_socket(self.key)
 
+    def close(self):
+        #self.connected = False
+        #self.accepting = False
+        #self.del_channel()
+        try:
+            self.socket.close()
+        except socket.error as why:
+            if why.args[0] not in (ENOTCONN, EBADF):
+                raise
+
 class server_socket(asyncore.dispatcher):
     def __init__(self, master, local_address, peer, remote_address):
         self.master=master
         self.local_address=local_address
         self.peer=peer
         self.remote_address=remote_address
-        asyncore.dispatcher.__init__(self, map=self.master.map)
-        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket=socket
+        self.socket=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setblocking(1)
         self.set_reuse_addr()
         self.bind(local_address)
         self.listen(1023)
+        self.run_thread=threading.Thread(name="accept %d" % hash(local_address), target=lambda: self.accept_thread())
+
+    def accept_thread(self):
+        while True:
+            self.handle_accept()
 
     def handle_accept(self):
         """Called when we have a new incoming connection to one of our listening sockets."""
@@ -291,22 +292,11 @@ class master():
 
         self.bot_index=0
         self.lock=threading.Lock()
-        #asyncore map
-        self.map={}
 
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
-            time.sleep(ASYNCORE_LOOP_RATE)
+            time.sleep(THROTTLE_RATE)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
-
-        self.loop_thread=threading.Thread(name=",".join(map(lambda bot: bot.boundjid.full, self.bots)), target=lambda: self.asyncore_loop())
-        self.loop_thread.start()
-
-    def asyncore_loop(self):
-        while True:
-            with self.lock:
-                asyncore.loop(0.0, True, count=1, map=self.map)
-            time.sleep(ASYNCORE_LOOP_RATE)
             
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
@@ -567,7 +557,6 @@ class master():
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
-        # attach the socket to the appropriate client_sockets and fix asyncore methods
         self.create_client_socket(key, connected_socket)
         self.send_connect_ack(key, "success", to)
 
@@ -578,6 +567,7 @@ class master():
     def create_client_socket_thread(self, key, socket):
         with self.lock:
             self.client_sockets[key] = client_socket(self, key, socket)
+            self.client_sockets[key].run_thread.start()
 
     def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
@@ -587,29 +577,27 @@ class master():
     def create_server_socket_thread(self, local_address, peer, remote_address):
         with self.lock:
             self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
+            self.server_sockets[local_address].run_thread.start()
         
     def delete_socket(self, key):
-        with self.client_sockets[key].close_lock:
-            if self.client_sockets[key].close_thread:
-                return()
-            self.client_sockets[key].close_thread=threading.Thread(name="delete %d" % hash(key), target=lambda: self.close_thread(key))
-            self.client_sockets[key].close_thread.start()
+        thread=threading.Thread(name="delete %d" % hash(key), target=lambda: self.close_thread(key))
+        thread.start()
 
     def close_thread(self, key):
         while True:
             with self.client_sockets[key].write_lock:
                 if not self.client_sockets[key].incomming_messages:
                     break
-            time.sleep(ASYNCORE_LOOP_RATE)   
+            time.sleep(THROTTLE_RATE)
+               
         with self.client_sockets[key].lock:
             self.client_sockets[key].close()
             self.client_sockets[key].running=False
-            while self.client_sockets[key].run_thread.is_alive():
-                time.sleep(THROTTLE_RATE/float(len(self.bots)))
+            
+        while self.client_sockets[key].run_thread.is_alive():
+            time.sleep(THROTTLE_RATE/float(len(self.bots)))
                 
         with self.lock:
-            if not key in self.client_sockets:
-                return()
             del(self.client_sockets[key])
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
