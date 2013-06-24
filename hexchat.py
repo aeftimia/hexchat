@@ -195,6 +195,7 @@ class client_socket(asyncore.dispatcher):
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         with self.lock:
             if self.running:
+                self.running=False
                 self.master.send_disconnect(self.key)
                 self.master.delete_socket(self.key)
 
