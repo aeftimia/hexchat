@@ -83,7 +83,7 @@ class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
-        self.__event_handlers_lock = self.master.event_handlers_lock
+        #self.__event_handlers_lock = self.master.event_handlers_lock
         #self.scheduler=self.master.scheduler
         #self.event_queue = self.master.event_queue
         #self.send_queue = self.master.send_queue      
@@ -146,39 +146,72 @@ class client_socket(asyncore.dispatcher):
         self.buffer=b''
         self.close_thread=False
         self.running=True
+        self.lock=threading.Lock()
+        self.read_lock=threading.Lock()
+        self.write_lock=threading.Lock()
+        self.close_lock=threading.Lock()
         self.run_thread=threading.Thread(name="check data buffer %d" % hash(key), target=lambda: self.check_data_buffer())
         self.run_thread.start()
         asyncore.dispatcher.__init__(self, socket, map=self.master.map)
 
     def readable(self):
-        return(not self.close_thread)
+        with self.lock:
+            return(not self.close_thread)
 
     def writable(self):
         return(False)
 
     def handle_read(self):
         """Called when a TCP socket has stuff to be read from it."""
-        
-        try:
-            data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
-            self.buffer+=data
-        except KeyError: #socket got deleted while writing to the buffer
-            pass
+        with self.read_lock:
+            self.buffer+=self.recv(int(RECV_RATE*float(len(self.master.bots))))
 
     #check client sockets for buffered data
     def check_data_buffer(self):
-        while self.running:
-            if self.buffer:
-                data=self.buffer
-                self.buffer=b''
-                if data:                    
+        while True:
+            with self.lock and self.read_lock:
+                if self.buffer:
+                    data=self.buffer
+                    self.buffer=b''                   
                     self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
+                elif not self.running:
+                    return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
+
+    def read_messages(self, iq_id, data):
+        thread=threading.Thread(name="%d read messages %d" % (iq_id, hash(self.key)), target=lambda: self.read_messages_thread(iq_id, data))
+        thread.start()
+
+    def read_messages_thread(self, iq_id, data):
+        with self.write_lock:
+            id_diff=(iq_id-self.last_id_received)%MAX_ID
+            if id_diff<0 and id_diff>-MAX_ID/2.:
+                logging.warn("received redundant message")
+                return()
+
+            logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
+            while id_diff>=len(self.incomming_messages):
+                self.incomming_messages.append(None)
+
+            self.incomming_messages[id_diff]=data
+
+            while self.incomming_messages and self.incomming_messages[0]!=None:
+                data=self.incomming_messages[0]
+                self.incomming_messages=self.incomming_messages[1:]
+                if data=="disconnect":
+                    self.incomming_messages=[]
+                    self.master.delete_socket(self.key)
+                    return()
+                self.last_id_received=(self.last_id_received+1)%MAX_ID
+                logging.debug("%s:%d last id received:"%self.key[0]+str(self.last_id_received))
+                while data:   
+                    data=data[self.send(data):]
 
     def handle_close(self):
         """Called when the TCP client socket closes."""
-        if self.close_thread:
-            return()
+        with self.close_lock:
+            if self.close_thread:
+                return()
         (local_address, remote_address)=(self.key[0], self.key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.master.send_disconnect(self.key)
@@ -200,7 +233,8 @@ class server_socket(asyncore.dispatcher):
         """Called when we have a new incoming connection to one of our listening sockets."""
         
         connection, local_address = self.accept()
-        threading.Thread(name="%s:%d" % local_address + " accepted by %s:%d" % self.local_address, target=lambda: self.handle_accept_thread(local_address, connection)).start()
+        thread=threading.Thread(name="%s:%d" % local_address + " accepted by %s:%d" % self.local_address, target=lambda: self.handle_accept_thread(local_address, connection))
+        thread.start()
 
     def handle_accept_thread(self, local_address, connection):
         with self.master.lock:
@@ -243,8 +277,8 @@ class master():
         self.peer_resources={}
                
         #initialize the other sleekxmpp clients.
-        self.event_handlers_lock=threading.Lock()
-        self.event_queue=queue.Queue()
+        #self.event_handlers_lock=threading.Lock()
+        #self.event_queue=queue.Queue()
         self.bots=[]
         for jid_password in jid_passwords:
             self.bots.append(bot(self, jid_password))
@@ -355,20 +389,7 @@ class master():
             self.delete_socket(key) 
             return()
 
-        id_diff=iq_id-self.client_sockets[key].last_id_received
-        if id_diff<0 and id_diff>-MAX_ID/2.:
-            logging.warn("received redundant message")
-            return()
-
-        id_diff=id_diff%MAX_ID
-        
-        while id_diff>=len(self.client_sockets[key].incomming_messages):
-            self.client_sockets[key].incomming_messages.append(None)
-
-        self.client_sockets[key].incomming_messages[id_diff]="disconnect"
-
-        if self.client_sockets[key].incomming_messages[0]=="disconnect":
-            self.delete_socket(key)  
+        self.client_sockets[key].read_messages(iq_id, "disconnect")
             
                     
     def data_handler(self, iq):
@@ -402,11 +423,6 @@ class master():
             self.delete_socket(key) 
             return()
 
-        id_diff=(iq_id-self.client_sockets[key].last_id_received)%MAX_ID
-        if id_diff<0 and id_diff>-MAX_ID/2.:
-            logging.warn("received redundant message")
-            return()
-
         try:
             #extract data, ignoring bytes we already received
             data=base64.b64decode(iq['packet']['data'].encode("UTF-8"))
@@ -416,27 +432,8 @@ class master():
             #silently disconnect
             self.delete_socket(key)
             return()
-        
-        logging.debug("%s:%d received data from " % key[0] + "%s:%d" % key[2])
 
-
-        while id_diff>=len(self.client_sockets[key].incomming_messages):
-            self.client_sockets[key].incomming_messages.append(None)
-
-        self.client_sockets[key].incomming_messages[id_diff]=data
-
-        try:
-            while self.client_sockets[key].incomming_messages and self.client_sockets[key].incomming_messages[0]!=None:
-                data=self.client_sockets[key].incomming_messages[0]
-                if data=="disconnect":
-                    self.delete_socket(key)
-                    return()
-                self.client_sockets[key].incomming_messages=self.client_sockets[key].incomming_messages[1:]
-                self.client_sockets[key].last_id_received=(self.client_sockets[key].last_id_received+1)%MAX_ID
-                while data:   
-                    data=data[self.client_sockets[key].send(data):]
-        except KeyError:
-            return()
+        self.client_sockets[key].read_messages(iq_id, data)
            
     def connect_ack_handler(self, iq):
         try:
@@ -574,7 +571,8 @@ class master():
         self.send_connect_ack(key, "success", to)
 
     def create_client_socket(self, key, socket):
-        threading.Thread(name="create client socket %d" % hash(key), target=lambda: self.create_client_socket_thread(key, socket)).start()
+        thread=threading.Thread(name="create client socket %d" % hash(key), target=lambda: self.create_client_socket_thread(key, socket))
+        thread.start()
 
     def create_client_socket_thread(self, key, socket):
         with self.lock:
@@ -582,27 +580,37 @@ class master():
 
     def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
-        threading.Thread(name="create server socket %d" % hash((local_address, peer, remote_address)), target=lambda: self.create_server_socket_thread(local_address, peer, remote_address)).start()
+        thread=threading.Thread(name="create server socket %d" % hash((local_address, peer, remote_address)), target=lambda: self.create_server_socket_thread(local_address, peer, remote_address))
+        thread.start()
 
     def create_server_socket_thread(self, local_address, peer, remote_address):
         with self.lock:
             self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
         
     def delete_socket(self, key):
-        if self.client_sockets[key].close_thread:
-            return()
-        self.client_sockets[key].close_thread=threading.Thread(name="close %d" % hash(key), target=lambda: self.close_thread(key))
-        self.client_sockets[key].close_thread.start()
+        with self.client_sockets[key].close_lock:
+            if self.client_sockets[key].close_thread:
+                return()
+            self.client_sockets[key].close_thread=threading.Thread(name="delete %d" % hash(key), target=lambda: self.close_thread(key))
+            self.client_sockets[key].close_thread.start()
 
-    def close_thread(self, key):  
-        with self.lock:
+    def close_thread(self, key):
+        while True:
+            with self.client_sockets[key].write_lock:
+                if not self.client_sockets[key].incomming_messages:
+                    break
+            time.sleep(ASYNCORE_LOOP_RATE)   
+        with self.client_sockets[key].lock:
             self.client_sockets[key].close()
             self.client_sockets[key].running=False
             while self.client_sockets[key].run_thread.is_alive():
                 time.sleep(THROTTLE_RATE/float(len(self.bots)))
+                
+        with self.lock:
+            if not key in self.client_sockets:
+                return()
             del(self.client_sockets[key])
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
-
 
 if __name__ == '__main__':
     logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
