@@ -319,7 +319,7 @@ class master():
         xml.append(local_port_stanza)
         
         remote_ip_stanza=ElementTree.Element("remote_ip")
-        remote_ip_stanza.text=local_address[0]
+        remote_ip_stanza.text=remote_address[0]
         xml.append(remote_ip_stanza)
 
         remote_port_stanza=ElementTree.Element("remote_port")
@@ -350,7 +350,7 @@ class master():
             for key in self.client_sockets:
                 if iq['from'].full in key[1]:
                     if len(self.client_sockets[key].aliases)>1:
-                        self.client_sockets[key].aliases=list(key[1]-frozenset([iq['from']]))
+                        self.client_sockets[key].aliases=list(key[1]-frozenset([iq['from'].full]))
                     else:
                         self.delete_socket(key)
 
@@ -633,32 +633,8 @@ if __name__ == '__main__':
         if index<len(sys.argv):
             master0.create_server_socket((sys.argv[index+1],int(sys.argv[index+2])), sys.argv[index+3], (sys.argv[index+4],int(sys.argv[index+5])))
     else:
-        if len(sys.argv)!=3:
-            raise(Exception("Wrong number of command line arguements"))
-        bots={}
-        fd=open(sys.argv[1])
-        lines=fd.read().splitlines()
-        fd.close()
-        for line in lines:
-            #if the line is of the form username@chatserver:password:
-            if line[-1]==":":
-                userpass_split=line.find(':')
-                try:
-                    username=line[:userpass_split]
-                    bots[username]=master(username, line[userpass_split+1:-1])
-                    continue
-                except IndexError:
-                    raise(Exception("No password supplied."))
-            [local_address, peer, remote_address]=line.split('==>')
-            #add a server socket listening for incomming connections
-            try:
-                local_address=local_address.split(":")
-                local_address=(local_address[0],int(local_address[1]))
-                remote_address=remote_address.split(":")
-                remote_address=(remote_address[0],int(remote_address[1]))
-                bots[username].add_server_socket(local_address, peer, remote_address)
-            except (OverflowError, socket.error, ValueError) as msg:
-                raise(msg)
+        #todo
+        pass
 
     while True:
         time.sleep(1)
