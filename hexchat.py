@@ -511,13 +511,14 @@ class master():
         self.send_iq(packet, key, 'set')
         
     def send_connect_message(self, key):
+        bot=self.bots[self.bot_index]
+        self.bot_index=(self.bot_index+1)%len(self.bots) 
+    
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-        self.bot_index=(self.bot_index+1)%len(self.bots)
-        bot=self.bots[self.bot_index]
         message=bot.Message()
         message['to']=key[1]
         message['id']='1'
@@ -528,8 +529,8 @@ class master():
 
     def send_iq(self, packet, key, iq_type, to=None):
         if to==None:
-            self.bot_index=(self.bot_index+1)%len(self.bots)
             bot=self.bots[self.bot_index]
+            self.bot_index=(self.bot_index+1)%len(self.bots)
         else: #this section is for sending connect_acks. 
               #we want to respond with the same bot that recieved the connect request
               #this helps prevent a man-in-the-middle attack
