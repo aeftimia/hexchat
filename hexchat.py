@@ -173,22 +173,22 @@ class client_socket(asyncore.dispatcher):
                 if not self.running:
                     return()
                     
-            with self.data_lock:
-                data=self.data
-                iq_id=self.iq_id
-                self.incomming_data.clear()
+                with self.data_lock:
+                    data=self.data
+                    iq_id=self.iq_id
+                    self.incomming_data.clear()
                 
-            id_diff=(iq_id-self.last_id_received)%MAX_ID
-            if id_diff<0 and id_diff>-MAX_ID/2.:
-                logging.warn("received redundant message")
-                continue
+                id_diff=(iq_id-self.last_id_received)%MAX_ID
+                if id_diff<0 and id_diff>-MAX_ID/2.:
+                    logging.warn("received redundant message")
+                    continue
 
-            logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
-            while id_diff>=len(self.incomming_messages):
-                self.incomming_messages.append(None)
+                logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
+                while id_diff>=len(self.incomming_messages):
+                    self.incomming_messages.append(None)
 
-            self.incomming_messages[id_diff]=data
-            self.write_data()
+                self.incomming_messages[id_diff]=data
+                self.write_data()
 
     def set_id_and_data(self, iq_id, data):
         with self.data_lock:
