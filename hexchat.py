@@ -154,12 +154,17 @@ class client_socket(asyncore.dispatcher):
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
         threading.Thread(name="read messages %d" % hash(self.key), target=lambda: self.read_messages()).start()
 
+    def get_alias(self):
+        alias=self.aliases[self.alias_index]
+        self.alias_index=(self.alias_index+1)%len(self.aliases)
+        return(alias)
+
     #check client sockets for buffered data
     def read_socket(self):
         while True:
             data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
             if data:              
-                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id)
+                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id, self.get_alias())
                 self.id=(self.id+1)%MAX_ID
             else:
                 return()
@@ -218,7 +223,7 @@ class client_socket(asyncore.dispatcher):
             logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
             self.close()
             if send_disconnect:
-                self.master.send_disconnect(self.key, self.id)
+                self.master.send_disconnect(self.key, self.id, self.get_alias())
                 self.id=(self.id+1)%MAX_ID
             self.set_id_and_data(None, None)
             self.master.delete_socket(self.key)
@@ -304,11 +309,19 @@ class master():
 
         self.bot_index=0
         self.lock=threading.Lock()
+        self.bot_lock=threading.Lock()
 
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
             time.sleep(THROTTLE_RATE)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+
+    def get_bot(self):
+        with self.bot_lock:
+            bot=self.bots[self.bot_index]
+            self.bot_index=(self.bot_index+1)%len(self.bots)
+            return(bot)
+
             
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
@@ -463,7 +476,7 @@ class master():
 
     #methods for sending xml
 
-    def send_data(self, key, data, iq_id):
+    def send_data(self, key, data, iq_id, alias):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
@@ -476,9 +489,15 @@ class master():
         id_stanza.text=str(iq_id)
         packet.append(id_stanza)
         
-        self.send_iq(packet, key, 'set')
+        bot=self.get_bot()
+        iq=bot.Iq()
+        iq['to']=alias
+        iq['from']=bot.boundjid.full
+        iq['type']='set'
+        iq.append(packet)
+        iq.send(False)
 
-    def send_disconnect(self, key, iq_id):
+    def send_disconnect(self, key, iq_id, alias):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
@@ -488,9 +507,15 @@ class master():
         id_stanza.text=str(iq_id)
         packet.append(id_stanza)
         
-        self.send_iq(packet, key, 'set')
+        bot=self.get_bot()
+        iq=bot.Iq()
+        iq['to']=alias
+        iq['from']=bot.boundjid.full
+        iq['type']='set'
+        iq.append(packet)
+        iq.send(False)
         
-    def send_connect_ack(self, key, response, to):
+    def send_connect_ack(self, key, response, jid):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
         packet.attrib['xmlns']="hexchat:connect_ack"
@@ -498,18 +523,31 @@ class master():
         response_stanza.text=response
         packet.append(response_stanza)
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
-        self.send_iq(packet, key, 'result', to)
-
+        
+        bot=[bot for bot in self.bots if bot.boundjid.bare==jid.bare][0]
+        iq=bot.Iq()
+        iq['to']=self.client_sockets[key].get_alias() 
+        iq['from']=bot.boundjid.full
+        iq['type']='result'
+        iq.append(packet)
+        iq.send(False)
+        
     def send_connect_iq(self, key):
+        bot=self.get_bot()
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-        self.send_iq(packet, key, 'set')
+        bot=self.get_bot()
+        iq=bot.Iq()
+        iq['to']=key[1]
+        iq['from']=bot.boundjid.full
+        iq['type']='set'
+        iq.append(packet)
+        iq.send(False)
         
     def send_connect_message(self, key):
-        bot=self.bots[self.bot_index]
-        self.bot_index=(self.bot_index+1)%len(self.bots) 
+        bot=self.get_bot()
     
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
@@ -524,35 +562,10 @@ class master():
         message.append(packet)
         message.send()
 
-    def send_iq(self, packet, key, iq_type, to=None):
-        if to==None:
-            bot=self.bots[self.bot_index]
-            self.bot_index=(self.bot_index+1)%len(self.bots)
-        else: #this section is for sending connect_acks. 
-              #we want to respond with the same bot that recieved the connect request
-              #this helps prevent a man-in-the-middle attack
-              #in which someone intercepts a message
-              #and responds with a connect_ack from a different JID
-            bot=[bot for bot in self.bots if bot.boundjid.bare==to.bare][0]
-        iq=bot.Iq()
-        iq['from']=bot.boundjid.full
-        iq['type']=iq_type
-        if key in self.client_sockets:
-            self.client_sockets[key].alias_index=(self.client_sockets[key].alias_index+1)%len(self.client_sockets[key].aliases)
-            iq['to']=self.client_sockets[key].aliases[self.client_sockets[key].alias_index]
-        else:
-            if type(key[1])==frozenset:
-                iq['to']=set(key[1]).pop()
-            else:
-                iq['to']=key[1]
-        iq.append(packet)
-        iq.send(False)
-
     ### Methods for connection/socket creation.
 
     def initiate_connection(self, key, to):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
-        
         (local_address, peer, remote_address)=key
         try: # connect to the ip:port
             logging.debug("trying to connect to %s:%d" % local_address)
@@ -568,20 +581,12 @@ class master():
         self.send_connect_ack(key, "success", to)
 
     def create_client_socket(self, key, socket):
-        thread=threading.Thread(name="create client socket %d" % hash(key), target=lambda: self.create_client_socket_thread(key, socket))
-        thread.start()
-
-    def create_client_socket_thread(self, key, socket):
         with self.lock:
             self.client_sockets[key] = client_socket(self, key, socket)
             self.client_sockets[key].run()
 
     def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
-        thread=threading.Thread(name="create server socket %d" % hash((local_address, peer, remote_address)), target=lambda: self.create_server_socket_thread(local_address, peer, remote_address))
-        thread.start()
-
-    def create_server_socket_thread(self, local_address, peer, remote_address):
         with self.lock:
             self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
             self.server_sockets[local_address].run_thread.start()
