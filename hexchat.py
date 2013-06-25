@@ -138,7 +138,7 @@ class client_socket(asyncore.dispatcher):
         self.key=key
         self.aliases=list(key[1])
         self.id=0
-        self.last_id_received=1
+        self.last_id_received=0
         self.incomming_messages=[]
         self.alias_index=0
         self.buffer=b''
@@ -158,28 +158,23 @@ class client_socket(asyncore.dispatcher):
     def read_socket(self):
         while True:
             data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
-            if data:
-                with self.lock:
-                    if self.running:               
-                        self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
-                    else:
-                        return()
+            if data:              
+                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id)
+                self.id=(self.id+1)%MAX_ID
             else:
                 return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
             
     def read_messages(self):
         while True: 
-                           
             self.incomming_data.wait()
-
             with self.lock:
                 if not self.running:
                     return()
                     
                 with self.data_lock:
                     data=self.data
-                    iq_id=self.iq_id
+                    iq_id=self.last_iq_id
                     self.incomming_data.clear()
                 
                 id_diff=(iq_id-self.last_id_received)%MAX_ID
@@ -196,7 +191,7 @@ class client_socket(asyncore.dispatcher):
 
     def set_id_and_data(self, iq_id, data):
         with self.data_lock:
-            self.iq_id=iq_id
+            self.last_iq_id=iq_id
             self.data=data
             self.incomming_data.set()
             
@@ -206,7 +201,6 @@ class client_socket(asyncore.dispatcher):
             data=self.incomming_messages[0]
             self.incomming_messages=self.incomming_messages[1:]
             if data=="disconnect":
-                self.incomming_messages=[]
                 self.handle_close(False)
                 return()
             self.last_id_received=(self.last_id_received+1)%MAX_ID
@@ -217,15 +211,17 @@ class client_socket(asyncore.dispatcher):
     def handle_close(self, send_disconnect=True):
         """Called when the TCP client socket closes."""
         with self.lock:
-            if self.running:
-                self.running=False
-                (local_address, remote_address)=(self.key[0], self.key[2])
-                logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-                if send_disconnect:
-                    self.master.send_disconnect(self.key)
-                self.set_id_and_data(None, None)
-                self.close()
-                self.master.delete_socket(self.key)
+            if not self.running:
+                return()
+            self.running=False
+            (local_address, remote_address)=(self.key[0], self.key[2])
+            logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+            self.close()
+            if send_disconnect:
+                self.master.send_disconnect(self.key, self.id)
+                self.id=(self.id+1)%MAX_ID
+            self.set_id_and_data(None, None)
+            self.master.delete_socket(self.key)
 
     def close(self):
         #self.connected = False
@@ -254,19 +250,15 @@ class server_socket(asyncore.dispatcher):
     def accept_thread(self):
         while True:
             connection, local_address = self.accept()
-            thread=threading.Thread(name="%s:%d" % local_address + " accepted by %s:%d" % self.local_address, target=lambda: self.handle_accept_thread(local_address, connection))
-            thread.start()
-
-    def handle_accept_thread(self, local_address, connection):
-        with self.master.lock:
-            logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
-            self.master.pending_connections[(local_address, self.peer, self.remote_address)]=connection
-            if self.peer in self.master.peer_resources:
-                logging.debug("found resource, sending connection request via iq")
-                self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address))
-            else:
-                logging.debug("sending connection request via message")
-                self.master.send_connect_message((local_address, self.peer, self.remote_address))       
+            with self.master.lock:
+                logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
+                self.master.pending_connections[(local_address, self.peer, self.remote_address)]=connection
+                if self.peer in self.master.peer_resources:
+                    logging.debug("found resource, sending connection request via iq")
+                    self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address))
+                else:
+                    logging.debug("sending connection request via message")
+                    self.master.send_connect_message((local_address, self.peer, self.remote_address))       
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
@@ -471,7 +463,7 @@ class master():
 
     #methods for sending xml
 
-    def send_data(self, key, data):
+    def send_data(self, key, data, iq_id):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
@@ -481,24 +473,19 @@ class master():
         packet.append(data_stanza)
 
         id_stanza=ElementTree.Element('id')
-        self.client_sockets[key].id=(self.client_sockets[key].id+1)%MAX_ID
-        id_stanza.text=str(self.client_sockets[key].id)
+        id_stanza.text=str(iq_id)
         packet.append(id_stanza)
         
         self.send_iq(packet, key, 'set')
 
-    def send_disconnect(self, key):
+    def send_disconnect(self, key, iq_id):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
 
         id_stanza=ElementTree.Element('id')
-        if key in self.client_sockets:
-            self.client_sockets[key].id=(self.client_sockets[key].id+1)%MAX_ID
-            id_stanza.text=str(self.client_sockets[key].id)
-        else:
-            id_stanza.text="None"
+        id_stanza.text=str(iq_id)
         packet.append(id_stanza)
         
         self.send_iq(packet, key, 'set')
