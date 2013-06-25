@@ -219,9 +219,9 @@ class client_socket(asyncore.dispatcher):
                 logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
                 if send_disconnect:
                     self.master.send_disconnect(self.key)
-                 self.set_id_and_data(None, None)
-                 self.close()
-                 self.master.delete_socket(self.key)
+                self.set_id_and_data(None, None)
+                self.close()
+                self.master.delete_socket(self.key)
 
     def close(self):
         #self.connected = False
