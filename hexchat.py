@@ -144,8 +144,8 @@ class client_socket(asyncore.dispatcher):
         self.buffer=b''
         self.close_thread=False
         self.running=True
-        self.lock=threading.Lock()
-        self.data_lock=threading.Lock()
+        self.lock=threading.RLock()
+        self.data_lock=threading.RLock()
         self.incomming_data=threading.Event()
         socket.setblocking(1)
         self.socket=socket
@@ -219,7 +219,9 @@ class client_socket(asyncore.dispatcher):
                 logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
                 if send_disconnect:
                     self.master.send_disconnect(self.key)
-                threading.Thread(name="close %d"%hash(self.key), target=lambda: self.master.delete_socket(self.key)).start()
+                 self.set_id_and_data(None, None)
+                 self.close()
+                 self.master.delete_socket(self.key)
 
     def close(self):
         #self.connected = False
@@ -593,10 +595,7 @@ class master():
             self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
             self.server_sockets[local_address].run_thread.start()
         
-    def delete_socket(self, key):
-        self.client_sockets[key].set_id_and_data(None, None)
-        self.client_sockets[key].close()
-                
+    def delete_socket(self, key):                
         with self.lock:
             del(self.client_sockets[key])
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
