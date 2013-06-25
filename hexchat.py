@@ -158,8 +158,12 @@ class client_socket(asyncore.dispatcher):
     def read_socket(self):
         while True:
             data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
-            if data:                   
-                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
+            if data:
+                with self.lock:
+                    if self.running:               
+                        self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"))
+                    else:
+                        return()
             else:
                 return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
