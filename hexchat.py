@@ -8,7 +8,6 @@ import base64
 import time
 import threading
 import xml.etree.cElementTree as ElementTree
-import math
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 
@@ -220,7 +219,7 @@ class client_socket(asyncore.dispatcher):
         try:
             self.socket.close()
         except socket.error as why:
-            if why.args[0] not in (ENOTCONN, EBADF):
+            if why.args[0] not in (asyncore.ENOTCONN, asyncore.EBADF):
                 raise
 
 class server_socket(asyncore.dispatcher):
@@ -260,8 +259,6 @@ class master():
         'password' is the password to login with
         """
 
-        #self.room=room
-
         # <local_address> => <listening_socket> dictionary,
         # where 'local_address' is an IP:PORT string with the locallistening address,
         # and 'listening_socket' is the socket that listens and accepts connections on that address.
@@ -280,8 +277,6 @@ class master():
         self.peer_resources={}
                
         #initialize the other sleekxmpp clients.
-        #self.event_handlers_lock=threading.Lock()
-        #self.event_queue=queue.Queue()
         self.bots=[]
         for jid_password in jid_passwords:
             self.bots.append(bot(self, jid_password))
