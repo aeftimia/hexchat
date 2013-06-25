@@ -23,7 +23,7 @@ else:
     raw_input = input
 
 THROTTLE_RATE=1.0
-RECV_RATE=2**17
+RECV_RATE=2**16
 MAX_ID=2**32-1
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -145,17 +145,14 @@ class client_socket(asyncore.dispatcher):
         self.close_thread=False
         self.running=True
         self.lock=threading.RLock()
-        self.data_lock=threading.RLock()
-        self.incomming_data=threading.Event()
         socket.setblocking(1)
         self.socket=socket
 
     def run(self):
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
-        threading.Thread(name="read messages %d" % hash(self.key), target=lambda: self.read_messages()).start()
 
     def get_alias(self):
-        alias=self.aliases[self.alias_index]
+        alias=self.aliases[self.alias_index%len(self.aliases)]
         self.alias_index=(self.alias_index+1)%len(self.aliases)
         return(alias)
 
@@ -170,38 +167,26 @@ class client_socket(asyncore.dispatcher):
                 return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
             
-    def read_messages(self):
-        while True: 
-            self.incomming_data.wait()
-            with self.lock:
-                if not self.running:
-                    return()
-                    
-                with self.data_lock:
-                    data=self.data
-                    iq_id=self.last_iq_id
-                    self.incomming_data.clear()
+    def buffer_message(self, iq_id, data):
+        with self.lock:
+            if not self.running:
+                return()
                 
-                id_diff=(iq_id-self.last_id_received)%MAX_ID
-                if id_diff<0 and id_diff>-MAX_ID/2.:
-                    logging.warn("received redundant message")
-                    continue
+            id_diff=(iq_id-self.last_id_received)%MAX_ID
+            if id_diff<0 and id_diff>-MAX_ID/2.:
+                logging.warn("received redundant message")
+                return()
 
-                logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
-                while id_diff>=len(self.incomming_messages):
-                    self.incomming_messages.append(None)
+            logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
+            while id_diff>=len(self.incomming_messages):
+                self.incomming_messages.append(None)
 
-                self.incomming_messages[id_diff]=data
-                self.write_data()
-
-    def set_id_and_data(self, iq_id, data):
-        with self.data_lock:
-            self.last_iq_id=iq_id
-            self.data=data
-            self.incomming_data.set()
+            self.incomming_messages[id_diff]=data
+            self.write_data()
             
 
     def write_data(self):
+        logging.debug("%s:%d last id received:"%self.key[0]+str(self.last_id_received))
         while self.incomming_messages and self.incomming_messages[0]!=None:
             data=self.incomming_messages[0]
             self.incomming_messages=self.incomming_messages[1:]
@@ -225,7 +210,7 @@ class client_socket(asyncore.dispatcher):
             if send_disconnect:
                 self.master.send_disconnect(self.key, self.id, self.get_alias())
                 self.id=(self.id+1)%MAX_ID
-            self.set_id_and_data(None, None)
+            self.buffer_message(None, None)
             self.master.delete_socket(self.key)
 
     def close(self):
@@ -318,7 +303,7 @@ class master():
 
     def get_bot(self):
         with self.bot_lock:
-            bot=self.bots[self.bot_index]
+            bot=self.bots[self.bot_index%len(self.bots)]
             self.bot_index=(self.bot_index+1)%len(self.bots)
             return(bot)
 
@@ -404,7 +389,7 @@ class master():
             self.client_sockets[key].handle_close(False)
             return()
 
-        self.client_sockets[key].set_id_and_data(iq_id, "disconnect")
+        self.client_sockets[key].buffer_message(iq_id, "disconnect")
             
                     
     def data_handler(self, iq):
@@ -448,7 +433,7 @@ class master():
             self.client_sockets[key].handle_close(False)
             return()
 
-        self.client_sockets[key].set_id_and_data(iq_id, data)
+        self.client_sockets[key].buffer_message(iq_id, data)
            
     def connect_ack_handler(self, iq):
         try:
