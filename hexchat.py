@@ -219,7 +219,7 @@ class client_socket(asyncore.dispatcher):
                 logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
                 if send_disconnect:
                     self.master.send_disconnect(self.key)
-                self.master.delete_socket(self.key)
+                threading.Thread(name="close %d"%hash(self.key), target=lambda: self.master.delete_socket(self.key)).start()
 
     def close(self):
         #self.connected = False
@@ -356,7 +356,7 @@ class master():
                     if len(self.client_sockets[key].aliases)>1:
                         self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
                     else:
-                        self.delete_socket(key)
+                        self.client_sockets[key].handle_close(False)
 
     def connect_handler(self, msg):          
         try:
@@ -390,7 +390,7 @@ class master():
             iq_id=int(iq['disconnect']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
-            self.delete_socket(key) 
+            self.client_sockets[key].handle_close(False)
             return()
 
         self.client_sockets[key].set_id_and_data(iq_id, "disconnect")
@@ -424,7 +424,7 @@ class master():
             iq_id=int(iq['packet']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
-            self.delete_socket(key) 
+            self.client_sockets[key].handle_close(False)
             return()
 
         try:
@@ -434,7 +434,7 @@ class master():
             logging.warn("%s:%d received invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
             #silently disconnect
-            self.delete_socket(key)
+            self.client_sockets[key].handle_close(False)
             return()
 
         self.client_sockets[key].set_id_and_data(iq_id, data)
