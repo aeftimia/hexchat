@@ -194,7 +194,7 @@ class client_socket(asyncore.dispatcher):
                 self.handle_close(False)
                 return()
             self.last_id_received=(self.last_id_received+1)%MAX_ID
-            logging.debug("%s:%d last id received:"%self.key[0]+str(self.last_id_received))
+            logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
             while data:   
                 data=data[self.send(data):]
 
