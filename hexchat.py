@@ -22,7 +22,7 @@ else:
     raw_input = input
 
 THROTTLE_RATE=1.0
-RECV_RATE=2**17
+RECV_RATE=2**16
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
@@ -99,7 +99,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.register_plugin('xep_0199') # Ping
 
         if self.connect(self.connect_address):
-                self.process()
+            self.process()
         else:
             raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
 
@@ -146,7 +146,6 @@ class client_socket(asyncore.dispatcher):
         self.incomming_messages=[]
         self.alias_index=0
         self.buffer=b''
-        self.close_thread=False
         self.running=True
         self.running_lock=threading.RLock()
         self.alias_lock=threading.Lock()
@@ -180,7 +179,7 @@ class client_socket(asyncore.dispatcher):
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
             
     def buffer_message(self, iq_id, data):
-        threading.Thread(name="buffer message %d"%hash(self.key), target=lambda: self.buffer_message_thread(iq_id, data)).start()
+        threading.Thread(name="%d buffer message %d"%(hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
 
     def buffer_message_thread(self, iq_id, data):
         with self.running_lock:
@@ -383,10 +382,8 @@ class master():
         if key in self.client_sockets:
             logging.warn("connection request received from a connected socket")   
             return()
-            
-        self.initiate_connection(key, msg['to'])
-        if key in self.client_sockets:
-            self.client_sockets[key].aliases=msg['connect']['aliases'].split(',')            
+
+        self.initiate_connection(key, msg['to'])         
 
     def disconnect_handler(self, iq):
         """Handles incoming xmpp iqs for disconnections"""
