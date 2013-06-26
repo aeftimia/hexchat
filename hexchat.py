@@ -96,8 +96,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.add_event_handler("session_start", lambda event: self.session_start())
         self.add_event_handler("disconnected", lambda event: self.disconnected())
 
-        #MUC
-        #self.register_plugin('xep_0045')
+        self.register_plugin('xep_0199') # Ping
             
         #these handle the custom iq stanzas
         self.register_handler(callback.Callback('Connection Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
@@ -143,7 +142,8 @@ class client_socket(asyncore.dispatcher):
         self.buffer=b''
         self.close_thread=False
         self.running=True
-        self.lock=threading.RLock()
+        self.running_lock=threading.RLock()
+        self.alias_lock=threading.Lock()
         socket.setblocking(1)
         self.socket=socket
 
@@ -151,9 +151,10 @@ class client_socket(asyncore.dispatcher):
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
 
     def get_alias(self):
-        alias=self.aliases[self.alias_index%len(self.aliases)]
-        self.alias_index=(self.alias_index+1)%len(self.aliases)
-        return(alias)
+        with self.alias_lock:
+            alias=self.aliases[self.alias_index%len(self.aliases)]
+            self.alias_index=(self.alias_index+1)%len(self.aliases)
+            return(alias)
 
     #check client sockets for buffered data
     def read_socket(self):
@@ -167,7 +168,7 @@ class client_socket(asyncore.dispatcher):
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
             
     def buffer_message(self, iq_id, data):
-        with self.lock:
+        with self.running_lock:
             if not self.running:
                 return()
                 
@@ -199,7 +200,7 @@ class client_socket(asyncore.dispatcher):
 
     def handle_close(self, send_disconnect=True):
         """Called when the TCP client socket closes."""
-        with self.lock:
+        with self.running_lock:
             if not self.running:
                 return()
             self.running=False
@@ -239,7 +240,7 @@ class server_socket(asyncore.dispatcher):
     def accept_thread(self):
         while True:
             connection, local_address = self.accept()
-            with self.master.lock:
+            with self.master.pending_connections_lock:
                 logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
                 self.master.pending_connections[(local_address, self.peer, self.remote_address)]=connection
                 if self.peer in self.master.peer_resources:
@@ -288,7 +289,9 @@ class master():
                 raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
 
         self.bot_index=0
-        self.lock=threading.Lock()
+        self.client_sockets_lock=threading.Lock()
+        self.pending_connections_lock=threading.Lock()
+        self.peer_resources_lock=threading.Lock()
         self.bot_lock=threading.Lock()
 
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
@@ -330,22 +333,24 @@ class master():
     #incomming xml handlers
 
     def error_handler(self, iq):
-        with self.lock:
+        with self.peer_resources_lock:
             try:
                 del(self.peer_resources[iq['from'].bare])
             except KeyError:
                 pass
 
+        with self.pending_connections_lock:
             try:
                 self.pending_connections[iq['from'].bare].close()
                 del(self.pending_connections[iq['from'].bare])
             except KeyError:
                 pass
-            
-            for key in self.client_sockets:
+
+            for key in frozenset(self.client_sockets):
                 if iq['from'].full in self.client_sockets[key].aliases:
                     if len(self.client_sockets[key].aliases)>1:
-                        self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
+                        with self.client_sockets[key].alias_lock:
+                            self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
                     else:
                         self.client_sockets[key].handle_close(False)
 
@@ -445,14 +450,17 @@ class master():
         if not key0 in self.pending_connections:
             logging.warn('iq not in pending connections')
             return()
+           
+        with self.peer_resources_lock:
+            self.peer_resources[key0[1]]=iq['from'].full
             
-        logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
-        self.peer_resources[key0[1]]=iq['from'].full
-        if iq['connect_ack']['response']=="failure":
-            self.pending_connections[key0].close()
-            del(self.pending_connections[key0])
-        else:
-            self.create_client_socket(key, self.pending_connections.pop(key0))
+        with self.pending_connections_lock:
+            logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
+            if iq['connect_ack']['response']=="failure":
+                self.pending_connections[key0].close()
+                del(self.pending_connections[key0])
+            else:
+                self.create_client_socket(key, self.pending_connections.pop(key0))
 
     #methods for sending xml
 
@@ -475,7 +483,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
 
     def send_disconnect(self, key, iq_id, alias):
         (local_address, remote_address)=(key[0], key[2])
@@ -493,7 +501,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
         
     def send_connect_ack(self, key, response, jid):
         (local_address, remote_address)=(key[0], key[2])
@@ -510,7 +518,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
         
     def send_connect_iq(self, key):
         bot=self.get_bot()
@@ -524,7 +532,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
         
     def send_connect_message(self, key):
         bot=self.get_bot()
@@ -561,18 +569,17 @@ class master():
         self.send_connect_ack(key, "success", to)
 
     def create_client_socket(self, key, socket):
-        with self.lock:
+        with self.client_sockets_lock:
             self.client_sockets[key] = client_socket(self, key, socket)
             self.client_sockets[key].run()
 
     def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
-        with self.lock:
-            self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
-            self.server_sockets[local_address].run_thread.start()
+        self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
+        self.server_sockets[local_address].run_thread.start()
         
     def delete_socket(self, key):                
-        with self.lock:
+        with self.client_sockets_lock:
             del(self.client_sockets[key])
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
