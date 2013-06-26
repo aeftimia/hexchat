@@ -22,7 +22,7 @@ else:
     raw_input = input
 
 THROTTLE_RATE=1.0
-RECV_RATE=2**16
+RECV_RATE=99*10**3
 MAX_ID=2**32-1
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
@@ -159,7 +159,7 @@ class client_socket(asyncore.dispatcher):
     #check client sockets for buffered data
     def read_socket(self):
         while True:
-            data=self.recv(int(RECV_RATE*float(len(self.master.bots))))
+            data=self.recv(RECV_RATE)
             if data:              
                 self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id, self.get_alias())
                 self.id=(self.id+1)%MAX_ID
@@ -483,7 +483,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False, now=True)
+        iq.send(False)
 
     def send_disconnect(self, key, iq_id, alias):
         (local_address, remote_address)=(key[0], key[2])
@@ -501,7 +501,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False, now=True)
+        iq.send(False)
         
     def send_connect_ack(self, key, response, jid):
         (local_address, remote_address)=(key[0], key[2])
@@ -518,7 +518,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
-        iq.send(False, now=True)
+        iq.send(False)
         
     def send_connect_iq(self, key):
         bot=self.get_bot()
@@ -532,7 +532,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False, now=True)
+        iq.send(False)
         
     def send_connect_message(self, key):
         bot=self.get_bot()
