@@ -22,8 +22,9 @@ else:
     raw_input = input
 
 THROTTLE_RATE=1.0
-RECV_RATE=99*10**3
+RECV_RATE=2**17
 MAX_ID=2**32-1
+MAX_ID_DIFF=100
 
 class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
@@ -80,7 +81,6 @@ class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
-        #self.__event_handlers_lock = self.master.event_handlers_lock
         #self.scheduler=self.master.scheduler
         #self.event_queue = self.master.event_queue
         #self.send_queue = self.master.send_queue      
@@ -144,6 +144,7 @@ class client_socket(asyncore.dispatcher):
         self.running=True
         self.running_lock=threading.RLock()
         self.alias_lock=threading.Lock()
+        self.id_lock=threading.Lock()
         socket.setblocking(1)
         self.socket=socket
 
@@ -160,21 +161,32 @@ class client_socket(asyncore.dispatcher):
     def read_socket(self):
         while True:
             data=self.recv(RECV_RATE)
-            if data:              
+            if data: 
                 self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id, self.get_alias())
-                self.id=(self.id+1)%MAX_ID
+                with self.id_lock:
+                    self.id=(self.id+1)%MAX_ID
             else:
+                with self.running_lock:
+                    if self.running:
+                        self.master.send_disconnect(self.key, self.id, self.get_alias())
+                        self._handle_close()
                 return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
             
     def buffer_message(self, iq_id, data):
+        threading.Thread(name="buffer message %d"%hash(self.key), target=lambda: self.buffer_message_thread(iq_id, data)).start()
+
+    def buffer_message_thread(self, iq_id, data):
         with self.running_lock:
             if not self.running:
                 return()
                 
-            id_diff=(iq_id-self.last_id_received)%MAX_ID
-            if id_diff<0 and id_diff>-MAX_ID/2.:
-                logging.warn("received redundant message")
+            raw_id_diff=(iq_id-self.last_id_received)
+            id_diff=raw_id_diff%MAX_ID
+            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
+                logging.warn("received redundant message or too many messages in buffer. Disconnecting")
+                self.master.send_disconnect(self.key, self.id, self.get_alias())
+                self._handle_close()
                 return()
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
@@ -186,19 +198,18 @@ class client_socket(asyncore.dispatcher):
             
 
     def write_data(self):
-        logging.debug("%s:%d last id received:"%self.key[0]+str(self.last_id_received))
+        logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
         while self.incomming_messages and self.incomming_messages[0]!=None:
-            data=self.incomming_messages[0]
-            self.incomming_messages=self.incomming_messages[1:]
+            data=self.incomming_messages.pop(0)
             if data=="disconnect":
-                self.handle_close(False)
+                self._handle_close()
                 return()
             self.last_id_received=(self.last_id_received+1)%MAX_ID
-            logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
+            logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
             while data:   
                 data=data[self.send(data):]
 
-    def handle_close(self, send_disconnect=True):
+    def _handle_close(self):
         """Called when the TCP client socket closes."""
         with self.running_lock:
             if not self.running:
@@ -207,10 +218,6 @@ class client_socket(asyncore.dispatcher):
             (local_address, remote_address)=(self.key[0], self.key[2])
             logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
             self.close()
-            if send_disconnect:
-                self.master.send_disconnect(self.key, self.id, self.get_alias())
-                self.id=(self.id+1)%MAX_ID
-            self.buffer_message(None, None)
             self.master.delete_socket(self.key)
 
     def close(self):
@@ -276,6 +283,12 @@ class master():
 
         #peer's resources
         self.peer_resources={}
+
+        #locks
+        self.client_sockets_lock=threading.Lock()
+        self.pending_connections_lock=threading.Lock()
+        self.peer_resources_lock=threading.Lock()
+        self.bot_lock=threading.Lock()
                
         #initialize the other sleekxmpp clients.
         self.bots=[]
@@ -289,10 +302,6 @@ class master():
                 raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
 
         self.bot_index=0
-        self.client_sockets_lock=threading.Lock()
-        self.pending_connections_lock=threading.Lock()
-        self.peer_resources_lock=threading.Lock()
-        self.bot_lock=threading.Lock()
 
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
             time.sleep(THROTTLE_RATE)
@@ -346,13 +355,16 @@ class master():
             except KeyError:
                 pass
 
-            for key in frozenset(self.client_sockets):
+        with self.client_sockets_lock:
+            for key in self.client_sockets:
                 if iq['from'].full in self.client_sockets[key].aliases:
                     if len(self.client_sockets[key].aliases)>1:
                         with self.client_sockets[key].alias_lock:
                             self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
+                        with self.client_sockets[key].id_lock:
+                            self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
                     else:
-                        self.client_sockets[key].handle_close(False)
+                        self.client_sockets[key]._handle_close()
 
     def connect_handler(self, msg):          
         try:
@@ -386,7 +398,7 @@ class master():
             iq_id=int(iq['disconnect']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
-            self.client_sockets[key].handle_close(False)
+            self.client_sockets[key]._handle_close()
             return()
 
         self.client_sockets[key].buffer_message(iq_id, "disconnect")
@@ -420,7 +432,7 @@ class master():
             iq_id=int(iq['packet']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
-            self.client_sockets[key].handle_close(False)
+            self.client_sockets[key]._handle_close()
             return()
 
         try:
@@ -430,7 +442,7 @@ class master():
             logging.warn("%s:%d received invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
             #silently disconnect
-            self.client_sockets[key].handle_close(False)
+            self.client_sockets[key]._handle_close()
             return()
 
         self.client_sockets[key].buffer_message(iq_id, data)
@@ -468,14 +480,14 @@ class master():
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
-        
-        data_stanza=ElementTree.Element('data')
-        data_stanza.text=data
-        packet.append(data_stanza)
 
         id_stanza=ElementTree.Element('id')
         id_stanza.text=str(iq_id)
         packet.append(id_stanza)
+        
+        data_stanza=ElementTree.Element('data')
+        data_stanza.text=data
+        packet.append(data_stanza)
         
         bot=self.get_bot()
         iq=bot.Iq()
