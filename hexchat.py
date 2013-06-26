@@ -97,7 +97,13 @@ class bot(sleekxmpp.ClientXMPP):
         self.add_event_handler("disconnected", lambda event: self.disconnected())
 
         self.register_plugin('xep_0199') # Ping
-            
+
+        if self.connect(self.connect_address):
+                self.process()
+        else:
+            raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
+
+    def register_hexchat_handlers(self):
         #these handle the custom iq stanzas
         self.register_handler(callback.Callback('Connection Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
         self.register_handler(callback.Callback('Message Handler',stanzapath.StanzaPath('message@type=chat/connect'),self.master.connect_handler))
@@ -259,13 +265,17 @@ class server_socket(asyncore.dispatcher):
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords):
+    def __init__(self, jid_passwords, whitelist):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
         'jid' is the login username@chatserver
         'password' is the password to login with
         """
+
+        #whitelist of trusted ip addresses client sockets can connect to
+        #if None, can connect to anything
+        self.whitelist=whitelist
 
         # <local_address> => <listening_socket> dictionary,
         # where 'local_address' is an IP:PORT string with the locallistening address,
@@ -295,18 +305,15 @@ class master():
         for jid_password in jid_passwords:
             self.bots.append(bot(self, jid_password))
 
-        for index in range(len(self.bots)):
-            if self.bots[index].connect(self.bots[index].connect_address):
-                self.bots[index].process()
-            else:
-                raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
-
         self.bot_index=0
 
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
             time.sleep(THROTTLE_RATE)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+
+        for index in range(len(self.bots)):
+            self.bots[index].register_hexchat_handlers()
 
     def get_bot(self):
         with self.bot_lock:
@@ -515,7 +522,7 @@ class master():
         iq.append(packet)
         iq.send(False)
         
-    def send_connect_ack(self, key, response, jid):
+    def send_connect_ack(self, key, response, from_jid):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
         packet.attrib['xmlns']="hexchat:connect_ack"
@@ -524,9 +531,9 @@ class master():
         packet.append(response_stanza)
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
         
-        bot=[bot for bot in self.bots if bot.boundjid.bare==jid.bare][0]
+        bot=[bot for bot in self.bots if bot.boundjid.bare==from_jid.bare][0]
         iq=bot.Iq()
-        iq['to']=self.client_sockets[key].get_alias() 
+        iq['to']=set(key[1]).pop()
         iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
@@ -564,23 +571,29 @@ class master():
 
     ### Methods for connection/socket creation.
 
-    def initiate_connection(self, key, to):
+    def initiate_connection(self, key, jid):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
         (local_address, peer, remote_address)=key
+
+        if self.whitelist!=None and not local_address in self.whitelist:
+            logging.warn("client sent request to connect to %s:%d" % local_address)
+            self.send_connect_ack(key, "failure", jid)
+            return()
+                
         try: # connect to the ip:port
             logging.debug("trying to connect to %s:%d" % local_address)
             connected_socket=socket.create_connection(local_address, timeout=2.0)
         except (socket.error, OverflowError, ValueError):
             logging.warning("could not connect to %s:%d" % local_address)
             #if it could not connect, tell the bot on the the other it could not connect
-            self.send_connect_ack(key, "failure", to)
+            self.send_connect_ack(key, "failure", jid)
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         self.create_client_socket(key, connected_socket)
-        self.send_connect_ack(key, "success", to)
+        self.send_connect_ack(key, "success", jid)
 
-    def create_client_socket(self, key, socket):
+    def create_client_socket(self, key, socket): 
         with self.client_sockets_lock:
             self.client_sockets[key] = client_socket(self, key, socket)
             self.client_sockets[key].run()
@@ -596,8 +609,6 @@ class master():
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
 if __name__ == '__main__':
-    logging.basicConfig(filename=sys.argv[2],level=logging.DEBUG)
-    
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect)
@@ -605,16 +616,33 @@ if __name__ == '__main__':
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_ack)
 
     if sys.argv[1]=="-c":
-        #room=sys.argv[3]
-        index=3
+        if sys.argv[2]=='-d':
+            logging.basicConfig(filename=sys.argv[3],level=logging.DEBUG)
+            index=4
+        else:
+            logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
+            index=3
+            
         username_passwords=[]
-        while index<len(sys.argv) and sys.argv[index]!='-s':
+        while index<len(sys.argv) and not sys.argv[index] in ('-w','-s'):
             username_passwords.append((sys.argv[index], sys.argv[index+1]))
             index+=2
 
-        master0=master(username_passwords)
-        if index<len(sys.argv):
-            master0.create_server_socket((sys.argv[index+1],int(sys.argv[index+2])), sys.argv[index+3], (sys.argv[index+4],int(sys.argv[index+5])))
+        if sys.argv[index]=='-w':
+            index+=1
+            whitelist=[]
+            while index<len(sys.argv) and sys.argv[index]!='-s':
+                whitelist.append((sys.argv[index], int(sys.argv[index+1])))
+                index+=2
+        else:
+            whitelist=None        
+
+        master0=master(username_passwords, whitelist)
+        if sys.argv[index]=='-s':
+            index+=1
+            while index<len(sys.argv):
+                master0.create_server_socket((sys.argv[index],int(sys.argv[index+1])), sys.argv[index+2], (sys.argv[index+3],int(sys.argv[index+4])))
+                index+=5
     else:
         #todo
         pass

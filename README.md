@@ -36,9 +36,17 @@ python hexchat.py -c <log file> <serveruser1@chatserver> 'password1' <serveruser
 
 and the client is launched with:
 
-python hexchat.py -c <log file> <clientuser1@chatserver 'password1' <clientuser2@chatserver> 'password2' ... -s <local ip> <local port> <serveruser@chatserver> <remote ip> <remote port>
+python hexchat.py -c <log file> <clientuser1@chatserver 'password1' <clientuser2@chatserver> 'password2' ... -s <local ip1> <local port1> <serveruser1@chatserver1> <remote ip1> <remote port1> ...
 
 , where serveruser@chatserver is one of the logins used when launching the server (this one cannot be a gmail account).
+
+You can also specify a whitelist of ip:ports you will allow your bot to connect to. To do this, include a list of ips and ports as follows:
+
+python hexchat.ply -c ... -w ip1 port1 ip2 port2 ... -s ...
+
+Note that the -w option goes between the list of logins and the opional list of ip:ports to listen on. Simply add the -w option with no ips and ports to indicate that you do not want your computer to ever be used as a server.
+
+To run the program in debug mode, put a "-d" directly after the "-c" and leave the rest of the arguements the same.
 
 ------------------------------------------------------------------------------------------
 
