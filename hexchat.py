@@ -76,7 +76,7 @@ def iq_to_key(iq):
     
     key=(local_address, aliases, remote_address)
     
-    return(key)
+    return key
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
@@ -161,7 +161,7 @@ class client_socket(asyncore.dispatcher):
         with self.alias_lock:
             alias=self.aliases[self.alias_index%len(self.aliases)]
             self.alias_index=(self.alias_index+1)%len(self.aliases)
-            return(alias)
+            return alias
 
     #check client sockets for buffered data
     def read_socket(self):
@@ -176,7 +176,7 @@ class client_socket(asyncore.dispatcher):
                     if self.running:
                         self.master.send_disconnect(self.key, self.id, self.get_alias())
                         self._handle_close()
-                return()
+                return
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
 
     def buffer_message(self, iq_id, data):
@@ -185,7 +185,7 @@ class client_socket(asyncore.dispatcher):
     def buffer_message_thread(self, iq_id, data):
         with self.running_lock:
             if not self.running:
-                return()
+                return
                 
             raw_id_diff=(iq_id-self.last_id_received)
             id_diff=raw_id_diff%MAX_ID
@@ -193,7 +193,7 @@ class client_socket(asyncore.dispatcher):
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self.master.send_disconnect(self.key, self.id, self.get_alias())
                 self._handle_close()
-                return()
+                return
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
             while id_diff>=len(self.incomming_messages):
@@ -205,7 +205,7 @@ class client_socket(asyncore.dispatcher):
                 data=self.incomming_messages.pop(0)
                 if data=="disconnect":
                     self._handle_close()
-                    return()
+                    return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
                 logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
                 while data:   
@@ -215,7 +215,7 @@ class client_socket(asyncore.dispatcher):
         """Called when the TCP client socket closes."""
         with self.running_lock:
             if not self.running:
-                return()
+                return
             self.running=False
             (local_address, remote_address)=(self.key[0], self.key[2])
             logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
@@ -315,7 +315,7 @@ class master():
         with self.bot_lock:
             bot=self.bots[self.bot_index%len(self.bots)]
             self.bot_index=(self.bot_index+1)%len(self.bots)
-            return(bot)
+            return bot
 
             
     #turn local address and remote address into xml stanzas in the given element tree
@@ -340,7 +340,7 @@ class master():
         aliases_stanza.text=",".join(self.aliases)
         xml.append(aliases_stanza)
         
-        return(xml)
+        return xml
             
     #incomming xml handlers
 
@@ -373,11 +373,11 @@ class master():
             key=iq_to_key(msg['connect'])
         except ValueError:
             logging.warn('received bad port')
-            return()
+            return
 
         if key in self.client_sockets:
             logging.warn("connection request received from a connected socket")   
-            return()
+            return
 
         self.initiate_connection(key, msg['to'])         
 
@@ -387,11 +387,11 @@ class master():
             key=iq_to_key(iq['disconnect'])
         except ValueError:
             logging.warn('received bad port')
-            return()
+            return
 
         if not key in self.client_sockets:
             logging.warn("%s:%d" % key[2] + " seemed to forge a disconnect to %s:%d." % key[0])
-            return()
+            return
             
         #client wants to disconnect                    
         try:
@@ -399,7 +399,7 @@ class master():
         except ValueError:
             logging.warn("received bad id. Disconnecting")
             self.client_sockets[key]._handle_close()
-            return()
+            return
 
         self.client_sockets[key].buffer_message(iq_id, "disconnect")
             
@@ -410,7 +410,7 @@ class master():
             key=iq_to_key(iq['packet'])
         except ValueError:
             logging.warn('received bad port')
-            return()
+            return
             
         if not key in self.client_sockets:
             #this is most likely caused by one socket disconnecting
@@ -426,14 +426,14 @@ class master():
             #the disconnect process
             if iq['packet']['data']:
                 logging.warn("%s:%d received data from " % key[0] + "%s:%d, but is not connected." % key[2])
-            return()
+            return
 
         try:
             iq_id=int(iq['packet']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
             self.client_sockets[key]._handle_close()
-            return()
+            return
 
         try:
             #extract data, ignoring bytes we already received
@@ -443,7 +443,7 @@ class master():
             #bad data can only mean trouble
             #silently disconnect
             self.client_sockets[key]._handle_close()
-            return()
+            return
 
         self.client_sockets[key].buffer_message(iq_id, data)
            
@@ -452,16 +452,16 @@ class master():
             key=iq_to_key(iq['connect_ack'])
         except ValueError:
             logging.warn('received bad port')
-            return()
+            return
 
         key0=(key[0], iq['from'].bare, key[2])
         if not key0 in self.pending_connections:
             logging.debug("key not found in sockets or pending connections")
-            return()
+            return
                 
         if not key0 in self.pending_connections:
             logging.warn('iq not in pending connections')
-            return()
+            return
            
         with self.peer_resources_lock:
             self.peer_resources[key0[1]]=iq['from'].full
@@ -531,7 +531,7 @@ class master():
         iq['type']='result'
         iq.append(packet)
         iq.send(False, now=True)
-        return(bot)
+        return bot
             
         
     def send_connect_iq(self, key):
@@ -573,7 +573,7 @@ class master():
         if self.whitelist!=None and not local_address in self.whitelist:
             logging.warn("client sent request to connect to %s:%d" % local_address)
             self.send_connect_ack(key, "failure", jid)
-            return()
+            return
                 
         try: # connect to the ip:port
             logging.debug("trying to connect to %s:%d" % local_address)
@@ -582,7 +582,7 @@ class master():
             logging.warning("could not connect to %s:%d" % local_address)
             #if it could not connect, tell the bot on the the other it could not connect
             self.send_connect_ack(key, "failure", jid)
-            return()
+            return
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         bot=self.send_connect_ack(key, "success", jid)
