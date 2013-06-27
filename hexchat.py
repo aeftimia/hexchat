@@ -21,7 +21,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='hexchat commands')
     parser.add_argument('--logfile', dest='logfile', type=str, nargs=1, help='the log file')
     parser.add_argument('--debug', const="debug", nargs='?', default=False, help='run in debug mode')
-    parser.add_argument('--login', dest='login', type=str, nargs='+', help="login1 'password1 login2 'pasword2' ...")
+    parser.add_argument('--login', dest='login', type=str, nargs='+', help="login1 'password1 login2 'pasword2' ...", required=True)
     parser.add_argument('--whitelist', dest='whitelist', nargs='*', default=None, help='whitelist of ips and ports this computer can connect to. ip1 port1 ip2 port2 ...')  
     parser.add_argument('--client', dest='client', type=str, nargs='+', default=False, help='Ports to listen on and JIDs and ports to forward to. <local ip1> <local port1> <server jid1> <remote ip1> <remote port1> ...')
     args=parser.parse_args()
