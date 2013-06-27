@@ -7,6 +7,7 @@ import sys
 import base64
 import time
 import threading
+import argparse
 import xml.etree.cElementTree as ElementTree
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
@@ -610,37 +611,40 @@ if __name__ == '__main__':
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_ack)
 
-    if sys.argv[1]=="-c":
-        if sys.argv[2]=='-d':
-            logging.basicConfig(filename=sys.argv[3],level=logging.DEBUG)
-            index=4
-        else:
-            logging.basicConfig(filename=sys.argv[2],level=logging.WARN)
-            index=3
-            
-        username_passwords=[]
-        while index<len(sys.argv) and not sys.argv[index] in ('-w','-s'):
-            username_passwords.append((sys.argv[index], sys.argv[index+1]))
-            index+=2
+    parser = argparse.ArgumentParser(description='hexchat commands')
+    parser.add_argument('--logfile', dest='logfile', type=str, nargs=1, help='the log file')
+    parser.add_argument('--debug', const="debug", nargs='?', default=False, help='run in debug mode')
+    parser.add_argument('--login', dest='login', type=str, nargs='+', help="login1 'password1 login2 'pasword2' ...")
+    parser.add_argument('--whitelist', dest='whitelist', nargs='*', default=None, help='whitelist of ips and ports this computer can connect to. ip1 port1 ip2 port2 ...')  
+    parser.add_argument('--client', dest='client', type=str, nargs='+', default=False, help='Ports to listen on and JIDs and ports to forward to. <local ip1> <local port1> <server jid1> <remote ip1> <remote port1> ...')
+    args=parser.parse_args()
 
-        if sys.argv[index]=='-w':
-            index+=1
-            whitelist=[]
-            while index<len(sys.argv) and sys.argv[index]!='-s':
-                whitelist.append((sys.argv[index], int(sys.argv[index+1])))
-                index+=2
-        else:
-            whitelist=None        
-
-        master0=master(username_passwords, whitelist)
-        if sys.argv[index]=='-s':
-            index+=1
-            while index<len(sys.argv):
-                master0.create_server_socket((sys.argv[index],int(sys.argv[index+1])), sys.argv[index+2], (sys.argv[index+3],int(sys.argv[index+4])))
-                index+=5
+    if args.debug:
+        logging.basicConfig(filename=args.logfile[0],level=logging.DEBUG)
     else:
-        #todo
-        pass
+        logging.basicConfig(filename=args.logfile[0],level=logging.WARN)
+            
+    username_passwords=[]
+    index=0
+    while index<len(args.login):
+        username_passwords.append((args.login[index], args.login[index+1]))
+        index+=2
 
+    if args.whitelist==None:
+        whitelist=None
+    else:
+        whitelist=[]
+        index=0
+        while index<len(args.whitelist):
+            whitelist.append((args.whitelist[index], int(args.whitelist[index+1])))
+            index+=2       
+
+    master0=master(username_passwords, whitelist)
+    if args.client:
+        index=0
+        while index<len(args.client):
+            master0.create_server_socket((args.client[index],int(args.client[index+1])), args.client[index+2], (args.client[index+3],int(args.client[index+4])))
+            index+=5
+            
     while True:
         time.sleep(1)

@@ -32,29 +32,28 @@ When a disconnect message is received, the bot checks if there are any entries i
 
 Running the program:
 The server is launched with:
-python hexchat.py -c <log file> <serveruser1@chatserver> 'password1' <serveruser2@chatserver> 'password2' ...
+python hexchat.py --logfile <log file> --login <serveruser1@chatserver> 'password1' <serveruser2@chatserver> 'password2' ...
 
 and the client is launched with:
 
-python hexchat.py -c <log file> <clientuser1@chatserver 'password1' <clientuser2@chatserver> 'password2' ... -s <local ip1> <local port1> <serveruser1@chatserver1> <remote ip1> <remote port1> ...
+python hexchat.py --logfile <log file> --login <clientuser1@chatserver 'password1' <clientuser2@chatserver> 'password2' ... --client <local ip1> <local port1> <serveruser@chatserver1> <remote ip1> <remote port1> ...
 
 , where serveruser@chatserver is one of the logins used when launching the server (this one cannot be a gmail account).
 
-You can also specify a whitelist of ip:ports you will allow your bot to connect to. To do this, include a list of ips and ports as follows:
+You can also specify a whitelist of ip:ports you will allow your bot to connect to with the --whitelist option. This is used as follows:
+python hexchat.py ... --whitelist ip1 port1 ip2 port2 ...
 
-python hexchat.ply -c ... -w ip1 port1 ip2 port2 ... -s ...
+Use the --debug flag to run the program in debug mode:
 
-Note that the -w option goes between the list of logins and the opional list of ip:ports to listen on. Simply add the -w option with no ips and ports to indicate that you do not want your computer to ever be used as a server.
-
-To run the program in debug mode, put a "-d" directly after the "-c" and leave the rest of the arguements the same.
+python hexchat.py --debug --logfile ...
 
 ------------------------------------------------------------------------------------------
 
 Example:
 client:
-python hexchat.py -c  /tmp/hexchat alice@gmail.com 'alices password' bob@gmail.com 'bobs password' charlie@jabber.org 'charlies password' -s 127.0.0.1 5555 robert@jabber.org <some ip address> <some port number>
+python hexchat.py --logfile /tmp/hexchat --login alice@gmail.com 'alices password' bob@gmail.com 'bobs password' charlie@jabber.org 'charlies password' --client 127.0.0.1 5555 robert@jabber.org <some ip address> <some port number>
 
 server:
-python hexchat.py -c /tmp/hexchat robert@jabber.org 'roberts password' eve@gmail.com 'eves password' alicia@jabber.org 'alicias password'
+python hexchat.py --logfile /tmp/hexchat --login robert@jabber.org 'roberts password' eve@gmail.com 'eves password' alicia@jabber.org 'alicias password'
 
 Now when when the client connects to 127.0.0.1:5555, the data will be forwarded to the server, which will in turn forward the connection and data to <some ip address>:<some port number>.
