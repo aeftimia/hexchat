@@ -35,7 +35,7 @@ def iq_to_key(iq):
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords, whitelist):
+    def __init__(self, jid_passwords, whitelist, num_logins):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
@@ -64,6 +64,9 @@ class master():
         #peer's resources
         self.peer_resources={}
 
+        #number of times it should login to each account
+        self.num_logins=num_logins
+
         #locks
         self.client_sockets_lock=threading.Lock()
         self.pending_connections_lock=threading.Lock()
@@ -72,8 +75,9 @@ class master():
                
         #initialize the other sleekxmpp clients.
         self.bots=[]
-        for jid_password in jid_passwords:
-            self.bots.append(bot(self, jid_password))
+        for _ in range(self.num_logins):
+            for jid_password in jid_passwords:
+                self.bots.append(bot(self, jid_password))
 
         self.bot_index=0
 

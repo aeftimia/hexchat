@@ -1,9 +1,9 @@
 import logging
+import threading
 import sleekxmpp
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 from stanza_plugins import *
-import threading
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):

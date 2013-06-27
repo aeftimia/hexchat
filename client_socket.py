@@ -5,7 +5,7 @@ import time
 import threading
 
 RECV_RATE=2**15
-THROTTLE_RATE=0.25
+THROTTLE_RATE=1.0
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
@@ -20,7 +20,7 @@ class client_socket(asyncore.dispatcher):
         self.alias_index=0
         self.buffer=b''
         self.running=True
-        self.running_lock=threading.RLock()
+        self.running_lock=threading.Lock()
         self.alias_lock=threading.Lock()
         self.id_lock=threading.Lock()
         self.bot_lock=threading.Lock()
@@ -60,9 +60,9 @@ class client_socket(asyncore.dispatcher):
                 with self.running_lock:
                     if self.running:
                         self.master.send_disconnect(self.key, self.get_id(), self.get_alias(), self.get_bot())
-                        self._handle_close()
+                        self.__handle_close()
                 return
-            time.sleep(THROTTLE_RATE)
+            time.sleep(THROTTLE_RATE/float(self.master.num_logins))
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
@@ -77,7 +77,7 @@ class client_socket(asyncore.dispatcher):
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self.master.send_disconnect(self.key, self.get_id(), self.get_alias(), self.get_bot())
-                self._handle_close()
+                self.__handle_close()
                 return
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
@@ -89,7 +89,7 @@ class client_socket(asyncore.dispatcher):
             while self.incomming_messages and self.incomming_messages[0]!=None:
                 data=self.incomming_messages.pop(0)
                 if data=="disconnect":
-                    self._handle_close()
+                    self.__handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
                 logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
@@ -101,11 +101,14 @@ class client_socket(asyncore.dispatcher):
         with self.running_lock:
             if not self.running:
                 return
-            self.running=False
-            (local_address, remote_address)=(self.key[0], self.key[2])
-            logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-            self.close()
-            self.master.delete_socket(self.key)
+            self.__handle_close()
+
+    def __handle_close(self):
+        self.running=False
+        (local_address, remote_address)=(self.key[0], self.key[2])
+        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+        self.close()
+        self.master.delete_socket(self.key)
 
     def close(self):
         #self.connected = False
