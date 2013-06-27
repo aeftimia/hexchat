@@ -357,16 +357,15 @@ class master():
             except KeyError:
                 pass
 
-        with self.client_sockets_lock:
-            for key in self.client_sockets:
-                if iq['from'].full in self.client_sockets[key].aliases:
-                    if len(self.client_sockets[key].aliases)>1:
-                        with self.client_sockets[key].alias_lock:
-                            self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
-                        with self.client_sockets[key].id_lock:
-                            self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
-                    else:
-                        threading.Thread(name="close %d" % hash(key), target=lambda: self.client_sockets[key]._handle_close()).start()
+        for key in self.client_sockets:
+            if iq['from'].full in self.client_sockets[key].aliases:
+                if len(self.client_sockets[key].aliases)>1:
+                    with self.client_sockets[key].alias_lock:
+                        self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
+                    with self.client_sockets[key].id_lock:
+                        self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
+                else:
+                    self.client_sockets[key]._handle_close()
 
     def connect_handler(self, msg):          
         try:
