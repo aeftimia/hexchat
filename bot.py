@@ -3,14 +3,13 @@ import sleekxmpp
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 from stanza_plugins import *
+import threading
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
-        #self.scheduler=self.master.scheduler
-        #self.event_queue = self.master.event_queue
-        #self.send_queue = self.master.send_queue      
+        self._send_lock=threading.Lock()
       
         # gmail xmpp server is actually at talk.google.com
         if jid_password[0].find("@gmail.com")!=-1:

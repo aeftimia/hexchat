@@ -5,7 +5,7 @@ import time
 import threading
 
 RECV_RATE=2**15
-THROTTLE_RATE=1.0
+THROTTLE_RATE=0.25
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
@@ -55,14 +55,16 @@ class client_socket(asyncore.dispatcher):
             data=self.recv(RECV_RATE)
             if data:
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
-                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias(), self.get_bot())
+                bot=self.get_bot()
+                with bot._send_lock:
+                    self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias(), bot)
             else:
                 with self.running_lock:
                     if self.running:
                         self.master.send_disconnect(self.key, self.get_id(), self.get_alias(), self.get_bot())
                         self._handle_close()
                 return
-            time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
+            time.sleep(THROTTLE_RATE)
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
