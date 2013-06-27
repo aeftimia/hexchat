@@ -64,9 +64,6 @@ class master():
         #peer's resources
         self.peer_resources={}
 
-        #number of times it should login to each account
-        self.num_logins=num_logins
-
         #locks
         self.client_sockets_lock=threading.Lock()
         self.pending_connections_lock=threading.Lock()
