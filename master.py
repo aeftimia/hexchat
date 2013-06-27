@@ -90,7 +90,6 @@ class master():
             bot=self.bots[self.bot_index%len(self.bots)]
             self.bot_index=(self.bot_index+1)%len(self.bots)
             return bot
-
             
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
@@ -250,7 +249,7 @@ class master():
 
     #methods for sending xml
 
-    def send_data(self, key, data, iq_id, alias):
+    def send_data(self, key, data, iq_id, alias, bot):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
@@ -263,7 +262,6 @@ class master():
         data_stanza.text=data
         packet.append(data_stanza)
         
-        bot=self.get_bot()
         iq=bot.Iq()
         iq['to']=alias
         iq['from']=bot.boundjid.full
@@ -271,7 +269,7 @@ class master():
         iq.append(packet)
         iq.send(False, now=True)
 
-    def send_disconnect(self, key, iq_id, alias):
+    def send_disconnect(self, key, iq_id, alias, bot):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
@@ -281,7 +279,6 @@ class master():
         id_stanza.text=str(iq_id)
         packet.append(id_stanza)
         
-        bot=self.get_bot()
         iq=bot.Iq()
         iq['to']=alias
         iq['from']=bot.boundjid.full
@@ -307,7 +304,6 @@ class master():
         iq.send(False, now=True)
         
     def send_connect_iq(self, key):
-        bot=self.get_bot()
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"

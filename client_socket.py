@@ -5,7 +5,7 @@ import time
 import threading
 
 RECV_RATE=2**15
-THROTTLE_RATE=0.1
+THROTTLE_RATE=1.0
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
@@ -23,6 +23,8 @@ class client_socket(asyncore.dispatcher):
         self.running_lock=threading.RLock()
         self.alias_lock=threading.Lock()
         self.id_lock=threading.Lock()
+        self.bot_lock=threading.Lock()
+        self.bot_index=0
         socket.setblocking(1)
         self.socket=socket
 
@@ -35,22 +37,28 @@ class client_socket(asyncore.dispatcher):
             self.alias_index=(self.alias_index+1)%len(self.aliases)
             return alias
 
+    def get_bot(self):
+        with self.bot_lock:
+            bot=self.master.bots[self.bot_index%len(self.master.bots)]
+            self.bot_index=(self.bot_index+1)%len(self.master.bots)
+            return bot
+
     #check client sockets for buffered data
     def read_socket(self):
         while True:
             data=self.recv(RECV_RATE)
             if data:
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
-                threading.Thread(name='%d sending data %d' % (hash(self.key), self.id), target=lambda: self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id, self.get_alias())).start()
+                threading.Thread(name='%d sending data %d' % (hash(self.key), self.id), target=lambda: self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id, self.get_alias(), self.get_bot())).start()
                 with self.id_lock:
                     self.id=(self.id+1)%MAX_ID
             else:
                 with self.running_lock:
                     if self.running:
-                        self.master.send_disconnect(self.key, self.id, self.get_alias())
+                        self.master.send_disconnect(self.key, self.id, self.get_alias(), self.get_bot())
                         self._handle_close()
                 return
-            time.sleep(THROTTLE_RATE)
+            time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
@@ -64,7 +72,7 @@ class client_socket(asyncore.dispatcher):
             id_diff=raw_id_diff%MAX_ID
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
-                self.master.send_disconnect(self.key, self.id, self.get_alias())
+                self.master.send_disconnect(self.key, self.id, self.get_alias(), self.get_bot())
                 self._handle_close()
                 return
 
