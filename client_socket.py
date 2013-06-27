@@ -55,9 +55,7 @@ class client_socket(asyncore.dispatcher):
             data=self.recv(RECV_RATE)
             if data:
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
-                bot=self.get_bot()
-                with bot._send_lock:
-                    self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias(), bot)
+                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias(), self.get_bot())
             else:
                 with self.running_lock:
                     if self.running:
