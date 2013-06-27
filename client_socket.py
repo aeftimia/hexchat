@@ -43,19 +43,23 @@ class client_socket(asyncore.dispatcher):
             self.bot_index=(self.bot_index+1)%len(self.master.bots)
             return bot
 
+    def get_id(self):
+        with self.id_lock:
+            iq_id=self.id
+            self.id=(self.id+1)%MAX_ID
+            return iq_id
+
     #check client sockets for buffered data
     def read_socket(self):
         while True:
             data=self.recv(RECV_RATE)
             if data:
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
-                threading.Thread(name='%d sending data %d' % (hash(self.key), self.id), target=lambda: self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.id, self.get_alias(), self.get_bot())).start()
-                with self.id_lock:
-                    self.id=(self.id+1)%MAX_ID
+                self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id, self.get_alias(), self.get_bot())
             else:
                 with self.running_lock:
                     if self.running:
-                        self.master.send_disconnect(self.key, self.id, self.get_alias(), self.get_bot())
+                        self.master.send_disconnect(self.key, self.get_id, self.get_alias(), self.get_bot())
                         self._handle_close()
                 return
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
@@ -72,7 +76,7 @@ class client_socket(asyncore.dispatcher):
             id_diff=raw_id_diff%MAX_ID
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
-                self.master.send_disconnect(self.key, self.id, self.get_alias(), self.get_bot())
+                self.master.send_disconnect(self.key, self.get_id, self.get_alias(), self.get_bot())
                 self._handle_close()
                 return
 
