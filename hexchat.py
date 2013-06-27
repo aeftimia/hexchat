@@ -583,8 +583,8 @@ class master():
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
-        self.create_client_socket(key, connected_socket)
         self.send_connect_ack(key, "success", jid)
+        self.create_client_socket(key, connected_socket)
 
     def create_client_socket(self, key, socket): 
         with self.client_sockets_lock:
