@@ -499,7 +499,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
 
     def send_disconnect(self, key, iq_id, alias):
         (local_address, remote_address)=(key[0], key[2])
@@ -517,7 +517,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
         
     def send_connect_ack(self, key, response, from_jid):
         (local_address, remote_address)=(key[0], key[2])
@@ -534,7 +534,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
         
     def send_connect_iq(self, key):
         bot=self.get_bot()
@@ -548,7 +548,7 @@ class master():
         iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        iq.send(False)
+        iq.send(False, now=True)
         
     def send_connect_message(self, key):
         bot=self.get_bot()
@@ -564,7 +564,7 @@ class master():
         message['from']=bot.boundjid.full
         message['type']='chat'
         message.append(packet)
-        message.send()
+        message.send(now=True)
 
     ### Methods for connection/socket creation.
 
