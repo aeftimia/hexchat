@@ -1,6 +1,7 @@
 import asyncore
 import base64
 import logging
+import socket
 import time
 import threading
 
@@ -21,6 +22,7 @@ class client_socket(asyncore.dispatcher):
         self.buffer=b''
         self.running=True
         self.running_lock=threading.Lock()
+        self.write_lock=threading.Lock()
         self.alias_lock=threading.Lock()
         self.id_lock=threading.Lock()
         self.bot_lock=threading.Lock()
@@ -57,27 +59,20 @@ class client_socket(asyncore.dispatcher):
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
                 self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias(), self.get_bot())
             else:
-                with self.running_lock:
-                    if self.running:
-                        self.master.send_disconnect(self.key, self.get_id(), self.get_alias(), self.get_bot())
-                        self.__handle_close()
+                self._handle_close(True)
                 return
-            time.sleep(THROTTLE_RATE/float(self.master.num_logins))
+            time.sleep(THROTTLE_RATE)
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
             
     def buffer_message_thread(self, iq_id, data):
-        with self.running_lock:
-            if not self.running:
-                return
-                
+        with self.write_lock:                
             raw_id_diff=(iq_id-self.last_id_received)
             id_diff=raw_id_diff%MAX_ID
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
-                self.master.send_disconnect(self.key, self.get_id(), self.get_alias(), self.get_bot())
-                self.__handle_close()
+                self._handle_close(True)
                 return
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
@@ -89,26 +84,59 @@ class client_socket(asyncore.dispatcher):
             while self.incomming_messages and self.incomming_messages[0]!=None:
                 data=self.incomming_messages.pop(0)
                 if data=="disconnect":
-                    self.__handle_close()
+                    self._handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
                 logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
                 while data:   
-                    data=data[self.send(data):]
+                    bytes=self.send(data)
+                    if bytes==None:
+                        self._handle_close(True)
+                        return
+                    data=data[bytes:]
 
-    def _handle_close(self):
+    def _handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""
         with self.running_lock:
-            if not self.running:
-                return
-            self.__handle_close()
+            self.__handle_close(send_disconnect)
 
-    def __handle_close(self):
+    def __handle_close(self, send_disconnect=False):
+        if not self.running:
+            return
         self.running=False
         (local_address, remote_address)=(self.key[0], self.key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.close()
         self.master.delete_socket(self.key)
+        if send_disconnect:
+            self.master.send_disconnect(self.key, self.get_id(), self.get_alias(), self.get_bot())
+
+    #overwrites of asyncore methods
+    def send(self, data):
+        try:
+            result = self.socket.send(data)
+            return result
+        except socket.error as why:
+            if why.args[0] in asyncore._DISCONNECTED:
+                return None
+            else:
+                raise
+
+    def recv(self, buffer_size):
+        try:
+            data = self.socket.recv(buffer_size)
+            if not data:
+                # a closed connection is indicated by signaling
+                # a read condition, and having recv() return 0.
+                return b''
+            else:
+                return data
+        except socket.error as why:
+            # winsock sometimes throws ENOTCONN
+            if why.args[0] in asyncore._DISCONNECTED:
+                return b''
+            else:
+                raise
 
     def close(self):
         #self.connected = False

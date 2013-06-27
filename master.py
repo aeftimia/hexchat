@@ -35,7 +35,7 @@ def iq_to_key(iq):
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords, whitelist, num_logins):
+    def __init__(self, jid_passwords, whitelist):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
@@ -75,9 +75,8 @@ class master():
                
         #initialize the other sleekxmpp clients.
         self.bots=[]
-        for _ in range(self.num_logins):
-            for jid_password in jid_passwords:
-                self.bots.append(bot(self, jid_password))
+        for jid_password in jid_passwords:
+            self.bots.append(bot(self, jid_password))
 
         self.bot_index=0
 
@@ -375,7 +374,9 @@ class master():
         self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
         self.server_sockets[local_address].run_thread.start()
         
-    def delete_socket(self, key):                
+    def delete_socket(self, key):
+        if not key in self.client_sockets:
+            return            
         with self.client_sockets_lock:
             del(self.client_sockets[key])
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
