@@ -305,8 +305,6 @@ class master():
         iq['type']='result'
         iq.append(packet)
         iq.send(False, now=True)
-        return bot
-            
         
     def send_connect_iq(self, key):
         bot=self.get_bot()
@@ -360,8 +358,7 @@ class master():
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
         bot=self.send_connect_ack(key, "success", jid)
-        with bot.send_lock: #make sure the connect ack was sent first
-            self.create_client_socket(key, connected_socket)
+        self.create_client_socket(key, connected_socket)
 
     def create_client_socket(self, key, socket): 
         with self.client_sockets_lock:
