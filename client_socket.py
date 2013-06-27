@@ -4,7 +4,7 @@ import logging
 import time
 import threading
 
-RECV_RATE=2**16
+RECV_RATE=2**15
 THROTTLE_RATE=1.0
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
