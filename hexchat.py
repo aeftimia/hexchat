@@ -177,10 +177,10 @@ class client_socket(asyncore.dispatcher):
                         self._handle_close()
                 return()
             time.sleep(THROTTLE_RATE/float(len(self.master.bots)))
-            
-    def buffer_message(self, iq_id, data):
-        threading.Thread(name="%d buffer message %d"%(hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
 
+    def buffer_message(self, iq_id, data):
+        threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
+            
     def buffer_message_thread(self, iq_id, data):
         with self.running_lock:
             if not self.running:
@@ -199,20 +199,16 @@ class client_socket(asyncore.dispatcher):
                 self.incomming_messages.append(None)
 
             self.incomming_messages[id_diff]=data
-            self.write_data()
-            
-
-    def write_data(self):
-        logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
-        while self.incomming_messages and self.incomming_messages[0]!=None:
-            data=self.incomming_messages.pop(0)
-            if data=="disconnect":
-                self._handle_close()
-                return()
-            self.last_id_received=(self.last_id_received+1)%MAX_ID
-            logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
-            while data:   
-                data=data[self.send(data):]
+            logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
+            while self.incomming_messages and self.incomming_messages[0]!=None:
+                data=self.incomming_messages.pop(0)
+                if data=="disconnect":
+                    self._handle_close()
+                    return()
+                self.last_id_received=(self.last_id_received+1)%MAX_ID
+                logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
+                while data:   
+                    data=data[self.send(data):]
 
     def _handle_close(self):
         """Called when the TCP client socket closes."""
