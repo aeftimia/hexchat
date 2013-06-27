@@ -132,7 +132,7 @@ class master():
             except KeyError:
                 pass
 
-        for key in self.client_sockets:
+        for key in frozenset(self.client_sockets):
             if iq['from'].full in self.client_sockets[key].aliases:
                 if len(self.client_sockets[key].aliases)>1:
                     with self.client_sockets[key].alias_lock:
