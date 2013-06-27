@@ -3,7 +3,7 @@ hexchat
 0. Protocol Overview
 This protocol uses an xmpp chat service as a means to forward tcp traffic from one computer to another. It listens on a port on one computer and forwards data through a chat server to another computer logged into the same chat server. 
 
-All data concerning the local ip:port, remote ip:port, and various JIDs the computer is using to access the chat server are put in individual stanzas. This information is present in every xmpp message exchanged between hexchat bots and will be collectively referred to as the "header", and is used to construct a key in the bot's routing table. The values in the routing table are asyncore dispatchers that can read and write information to a socket. Unless stated otherwise, each xmpp message described in this docuement should be assumed to contain a header. Furthermore, the header should be assumed to be enclosed in the child of the root xml element (which can be assumed to have no siblings). This is illustrated below:
+All data concerning the local ip:port, remote ip:port, and various JIDs the computer is using to access the chat server are put in individual stanzas. This information is present in every xmpp message exchanged between hexchat bots and will be collectively referred to as the "header", and is used to construct a key in the bot's routing table. The values in the routing table are sockets. Unless stated otherwise, each xmpp message described in this docuement should be assumed to contain a header. Furthermore, the header should be assumed to be enclosed in the child of the root xml element (which can be assumed to have no siblings). This is illustrated below:
 <iq....>
     <only_child...>
        header stanzs
@@ -29,7 +29,7 @@ When a hexchat bot recieves a connection request, the bot constructs a key from 
 
 c. The client recieves a connection acknowledgement
 When a bot recieves a "connect_ack" stanza enclosed in the appropriate IQ, it checks to see if any key composed of the remote ip and port, local ip and port, and a JID found in the aliases stanza (all of which are specified in stanzas in the header) matches a key in its table of pending connections. If it finds key that matches a key in its pending connections table and the "id" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
-((local ip, local port), set of aliases specified in the header, (remote ip, remote port)) ==> asyncore dispatcher that reads and writes to the appropriate socket
+((local ip, local port), set of aliases specified in the header, (remote ip, remote port)) ==> socket
 
 If the response stanza reads "failure" it closes the socket in the pending connections table and deletes the entry from the pending connections table. Otherwise, bot stores the value in the "response" stanza for later use.
 
