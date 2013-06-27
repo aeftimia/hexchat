@@ -1,3 +1,4 @@
+import logging
 import sleekxmpp
 import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
