@@ -366,7 +366,7 @@ class master():
                         with self.client_sockets[key].id_lock:
                             self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
                     else:
-                        self.client_sockets[key]._handle_close()
+                        threading.Thread(name="close %d" % hash(key), target=lambda: self.client_sockets[key]._handle_close()).start()
 
     def connect_handler(self, msg):          
         try:
@@ -531,6 +531,8 @@ class master():
         iq['type']='result'
         iq.append(packet)
         iq.send(False, now=True)
+        return(bot)
+            
         
     def send_connect_iq(self, key):
         bot=self.get_bot()
@@ -583,8 +585,9 @@ class master():
             return()
             
         logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
-        self.send_connect_ack(key, "success", jid)
-        self.create_client_socket(key, connected_socket)
+        bot=self.send_connect_ack(key, "success", jid)
+        with bot.send_lock: #make sure the connect ack was sent first
+            self.create_client_socket(key, connected_socket)
 
     def create_client_socket(self, key, socket): 
         with self.client_sockets_lock:
