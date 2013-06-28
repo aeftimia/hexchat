@@ -21,9 +21,11 @@ class client_socket(asyncore.dispatcher):
         self.alias_index=0
         self.buffer=b''
         self.running=True
-        self.reading=True
         self.running_lock=threading.Lock()
-        self.write_lock=threading.Lock()
+        self.reading=True
+        self.reading_lock=threading.Lock()
+        self.writing=True
+        self.writing_lock=threading.Lock()
         self.alias_lock=threading.Lock()
         self.id_lock=threading.Lock()
         self.bot_lock=threading.Lock()
@@ -54,11 +56,16 @@ class client_socket(asyncore.dispatcher):
 
     #check client sockets for buffered data
     def read_socket(self):
-        while self.reading:
+        while True:
+            with self.reading_lock:
+                if not self.reading:
+                    return
+                    
             data=self.recv(RECV_RATE)
             
-            if not self.reading:
-                return
+            with self.reading_lock:
+                if not self.reading:
+                    return
                 
             if data:
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
@@ -72,7 +79,10 @@ class client_socket(asyncore.dispatcher):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
             
     def buffer_message_thread(self, iq_id, data):
-        with self.write_lock:                
+        with self.writing_lock:     
+            if not self.writing:
+                return
+                           
             raw_id_diff=(iq_id-self.last_id_received)
             id_diff=raw_id_diff%MAX_ID
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
@@ -82,7 +92,8 @@ class client_socket(asyncore.dispatcher):
 
             #stop the socket from reading more data
             if data=="disconnect":
-                self.reading=False
+                with self.reading_lock:
+                    self.reading=False
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
             while id_diff>=len(self.incomming_messages):
@@ -100,7 +111,10 @@ class client_socket(asyncore.dispatcher):
                 while data:   
                     bytes=self.send(data)
                     if bytes==None:
-                        self._handle_close()
+                        with self.reading_lock:
+                            self.reading=False
+                        self.writing=False
+                        self._handle_close(True)
                         return
                     data=data[bytes:]
 
