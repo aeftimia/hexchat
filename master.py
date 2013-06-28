@@ -152,7 +152,7 @@ class master():
             logging.warn("connection request received from a connected socket")   
             return
 
-        self.initiate_connection(key, msg['to'])         
+        threading.Thread(name="initate connection to %s:%d" % key[0], target=lambda: self.initiate_connection(key, msg['to'])).start()       
 
     def disconnect_handler(self, iq):
         """Handles incoming xmpp iqs for disconnections"""
