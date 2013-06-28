@@ -6,7 +6,7 @@ import time
 import threading
 
 RECV_RATE=2**15
-THROTTLE_RATE=.2
+THROTTLE_RATE=1.0
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
@@ -61,7 +61,7 @@ class client_socket(asyncore.dispatcher):
             else:
                 self._handle_close(True)
                 return
-            time.sleep(THROTTLE_RATE)
+            time.sleep(THROTTLE_RATE/len(self.master.bots))
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
