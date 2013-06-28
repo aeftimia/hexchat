@@ -21,6 +21,7 @@ class client_socket(asyncore.dispatcher):
         self.alias_index=0
         self.buffer=b''
         self.running=True
+        self.reading=True
         self.running_lock=threading.Lock()
         self.write_lock=threading.Lock()
         self.alias_lock=threading.Lock()
@@ -53,8 +54,12 @@ class client_socket(asyncore.dispatcher):
 
     #check client sockets for buffered data
     def read_socket(self):
-        while True:
+        while self.reading:
             data=self.recv(RECV_RATE)
+            
+            if not self.reading:
+                return
+                
             if data:
                 #start a new thread because sleekxmpp uses an RLock for blocking sends
                 self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias(), self.get_bot())
@@ -74,6 +79,10 @@ class client_socket(asyncore.dispatcher):
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self._handle_close(True)
                 return
+
+            #stop the socket from reading more data
+            if data=="disconnect":
+                self.reading=False
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
             while id_diff>=len(self.incomming_messages):
