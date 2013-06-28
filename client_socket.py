@@ -100,7 +100,7 @@ class client_socket(asyncore.dispatcher):
                 while data:   
                     bytes=self.send(data)
                     if bytes==None:
-                        self._handle_close(True)
+                        self._handle_close()
                         return
                     data=data[bytes:]
 
