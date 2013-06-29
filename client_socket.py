@@ -2,15 +2,15 @@ import asyncore
 import base64
 import logging
 import socket
-import time
+#import time
 import threading
 
 RECV_RATE=2**14 #bytes
-MAX_BANDWIDTH=300*10**3 #b/s
+#MAX_BANDWIDTH=300*10**3 #b/s
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
-THROTTLE_RATE=float(RECV_RATE)/MAX_BANDWIDTH
+#THROTTLE_RATE=float(RECV_RATE)/MAX_BANDWIDTH
 
 class client_socket():
     def __init__(self, master, key, socket):
@@ -65,7 +65,7 @@ class client_socket():
                 else:
                     self.handle_close(True)
                     return
-            time.sleep(THROTTLE_RATE)
+            #time.sleep(THROTTLE_RATE)
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
