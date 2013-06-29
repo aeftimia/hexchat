@@ -5,7 +5,7 @@ import socket
 #import time
 import threading
 
-RECV_RATE=2**14 #bytes
+RECV_RATE=2**13 #bytes
 #MAX_BANDWIDTH=300*10**3 #b/s
 MAX_ID=2**32-1
 MAX_ID_DIFF=100

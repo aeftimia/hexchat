@@ -10,7 +10,7 @@ from stanza_plugins import *
 Karma is defined as the average number of bytes sent over a window of KARMA_RESET
 '''
 
-MAX_RATE=20*10**3 #b/s
+MAX_RATE=10*10**3 #b/s
 KARMA_RESET=20.0 #seconds
 
 class bot(sleekxmpp.ClientXMPP):
