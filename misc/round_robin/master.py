@@ -3,18 +3,12 @@ import logging
 import time
 import threading
 import socket
-from operator import itemgetter
 
 import sleekxmpp
 import xml.etree.cElementTree as ElementTree
-from sleekxmpp.xmlstream import tostring
-from sleekxmpp.stanza import Message, Iq
-
 from client_socket import client_socket, MAX_ID
 from server_socket import server_socket
 from bot import bot
-
-CONNECT_TIMEOUT=0.5
 
 #construct key from iq
 #return key and tuple indicating whether the key
@@ -41,7 +35,7 @@ def iq_to_key(iq):
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords, whitelist, num_logins):
+    def __init__(self, jid_passwords, whitelist):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
@@ -74,12 +68,12 @@ class master():
         self.client_sockets_lock=threading.Lock()
         self.pending_connections_lock=threading.Lock()
         self.peer_resources_lock=threading.Lock()
+        self.bot_lock=threading.Lock()
                
         #initialize the other sleekxmpp clients.
         self.bots=[]
-        for _ in range(num_logins):
-            for jid_password in jid_passwords:
-                self.bots.append(bot(self, jid_password))
+        for jid_password in jid_passwords:
+            self.bots.append(bot(self, jid_password))
 
         self.bot_index=0
 
@@ -90,6 +84,12 @@ class master():
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
+
+    def get_bot(self):
+        with self.bot_lock:
+            bot=self.bots[self.bot_index%len(self.bots)]
+            self.bot_index=(self.bot_index+1)%len(self.bots)
+            return bot
             
     #turn local address and remote address into xml stanzas in the given element tree
     def format_header(self, local_address, remote_address, xml):       
@@ -139,7 +139,7 @@ class master():
                     with self.client_sockets[key].id_lock:
                         self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
                 else:
-                    self.client_sockets[key].handle_close()
+                    self.client_sockets[key]._handle_close()
 
     def connect_handler(self, msg):          
         try:
@@ -147,7 +147,11 @@ class master():
         except ValueError:
             logging.warn('received bad port')
             return
-            
+
+        if key in self.client_sockets:
+            logging.warn("connection request received from a connected socket")   
+            return
+
         threading.Thread(name="initate connection to %s:%d" % key[0], target=lambda: self.initiate_connection(key, msg['to'])).start()       
 
     def disconnect_handler(self, iq):
@@ -167,7 +171,7 @@ class master():
             iq_id=int(iq['disconnect']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
-            self.client_sockets[key].handle_close()
+            self.client_sockets[key]._handle_close()
             return
 
         self.client_sockets[key].buffer_message(iq_id, "disconnect")
@@ -201,7 +205,7 @@ class master():
             iq_id=int(iq['packet']['id'])
         except ValueError:
             logging.warn("received bad id. Disconnecting")
-            self.client_sockets[key].handle_close()
+            self.client_sockets[key]._handle_close()
             return
 
         try:
@@ -211,7 +215,7 @@ class master():
             logging.warn("%s:%d received invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
             #silently disconnect
-            self.client_sockets[key].handle_close()
+            self.client_sockets[key]._handle_close()
             return
 
         self.client_sockets[key].buffer_message(iq_id, data)
@@ -241,12 +245,11 @@ class master():
                 self.pending_connections[key0].close()
                 del(self.pending_connections[key0])
             else:
-                with self.client_sockets_lock:
-                    self.create_client_socket(key, self.pending_connections.pop(key0))
+                self.create_client_socket(key, self.pending_connections.pop(key0))
 
     #methods for sending xml
 
-    def send_data(self, key, data, iq_id, alias):
+    def send_data(self, key, data, iq_id, alias, bot):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
@@ -258,16 +261,16 @@ class master():
         data_stanza=ElementTree.Element('data')
         data_stanza.text=data
         packet.append(data_stanza)
-
-        iq=Iq()
-        #iq['from']=bot.boundjid.full
+        
+        iq=bot.Iq()
         iq['to']=alias
+        iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        
-        self.send(iq)
+        with bot._send_lock:
+            iq.send(False, now=True)
 
-    def send_disconnect(self, key, iq_id, alias):
+    def send_disconnect(self, key, iq_id, alias, bot):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
@@ -277,16 +280,15 @@ class master():
         id_stanza.text=str(iq_id)
         packet.append(id_stanza)
         
-        iq=Iq()
+        iq=bot.Iq()
         iq['to']=alias
-        #iq['from']=bot.boundjid.full
+        iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
+        with bot._send_lock:
+            iq.send(False, now=True)
         
-        self.send(iq)
-
-                
-    def send_connect_ack(self, key, response, jid):
+    def send_connect_ack(self, key, response, from_jid):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
         packet.attrib['xmlns']="hexchat:connect_ack"
@@ -295,128 +297,83 @@ class master():
         packet.append(response_stanza)
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
         
-        bot=[bot for bot in self.bots if bot.boundjid.bare==jid.bare][0]
-        iq=Iq()
+        bot=[bot for bot in self.bots if bot.boundjid.bare==from_jid.bare][0]
+        iq=bot.Iq()
         iq['to']=set(key[1]).pop()
-        #iq['from']=bot.boundjid.full
+        iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
-        str_data=tostring(iq.xml, top_level=True)
-        bot.karma_lock.acquire()
-        sleep_seconds=bot.set_karma(len(str_data), time.time())
         with bot._send_lock:
-            time.sleep(sleep_seconds)
-            bot.send_raw(str_data, now=True)
-            
+            iq.send(False, now=True)
         
     def send_connect_iq(self, key):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
         logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-          
-        iq=Iq()
+        bot=self.get_bot()
+        iq=bot.Iq()
         iq['to']=key[1]
-        #iq['from']=bot.boundjid.full
+        iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
-        
-        self.send(iq)   
+        with bot._send_lock:
+            iq.send(False, now=True)
         
     def send_connect_message(self, key):
+        bot=self.get_bot()
+    
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
-        packet.attrib['xmlns']="hexchat:connect"       
-        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
+        packet.attrib['xmlns']="hexchat:connect"
         
-        message=Message()
+        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
+        message=bot.Message()
         message['to']=key[1]
-        #message['from']=bot.boundjid.full
+        message['id']='1'
+        message['from']=bot.boundjid.full
         message['type']='chat'
         message.append(packet)
-        
-        self.send(message)
-
-    def send(self, data):
-        str_data = tostring(data.xml, top_level=True)
-        num_bytes=len(str_data)
-        now=time.time()
-
-        time_bots=map(lambda bot: (bot.projected_wait(now), bot), self.bots) #all karma_locks are acquired and all _send_locks that can be acquired are acquired
-        
-        almost_ready_time_bot=None
-        ready_time_bot=None
-        for time_bot in time_bots:
-            if time_bot[0][0]:
-                if ready_time_bot==None:
-                    ready_time_bot=time_bot
-                elif time_bot[0][1]<ready_time_bot[0][1]:
-                    ready_time_bot[1]._send_lock.release()
-                    ready_time_bot[1].karma_lock.release()
-                    ready_time_bot=time_bot
-                else:
-                    time_bot[1]._send_lock.release()
-                    time_bot[1].karma_lock.release()
-            else:
-                if almost_ready_time_bot==None:
-                    almost_ready_time_bot=time_bot
-                elif time_bot[0][1]<almost_ready_time_bot[0][1]:
-                    almost_ready_time_bot[1].karma_lock.release()
-                    almost_ready_time_bot=time_bot
-                else:
-                    time_bot[1].karma_lock.release()
-                    
-        if ready_time_bot!=None:
-            if almost_ready_time_bot!=None:
-                almost_ready_time_bot[1].karma_lock.release()
-            bot=ready_time_bot[1]
-            sleep_seconds=bot.set_karma(num_bytes, now)
-        else:
-            bot=almost_ready_time_bot[1]
-            sleep_seconds=bot.set_karma(num_bytes, now)
-            bot._send_lock.acquire()
-        time.sleep(sleep_seconds)    
-        bot.send_raw(str_data, now=True)
-        bot._send_lock.release()
+        with bot._send_lock:
+            message.send(now=True)
 
     ### Methods for connection/socket creation.
 
     def initiate_connection(self, key, jid):
         """Initiate connection to 'local_address' and add the socket to the client sockets map."""
-        with self.client_sockets_lock:
-            if key in self.client_sockets:
-                return
-                
-            (local_address, peer, remote_address)=key
+        (local_address, peer, remote_address)=key
 
-            if self.whitelist!=None and not local_address in self.whitelist:
-                logging.warn("client sent request to connect to %s:%d" % local_address)
-                self.send_connect_ack(key, "failure", jid)
-                return
+        if self.whitelist!=None and not local_address in self.whitelist:
+            logging.warn("client sent request to connect to %s:%d" % local_address)
+            self.send_connect_ack(key, "failure", jid)
+            return
                 
-            try: # connect to the ip:port
-                logging.debug("trying to connect to %s:%d" % local_address)
-                connected_socket=socket.create_connection(local_address, timeout=CONNECT_TIMEOUT)
-            except (socket.error, OverflowError, ValueError):
-                logging.warning("could not connect to %s:%d" % local_address)
-                #if it could not connect, tell the bot on the the other it could not connect
-                self.send_connect_ack(key, "failure", jid)
-                return
+        try: # connect to the ip:port
+            logging.debug("trying to connect to %s:%d" % local_address)
+            connected_socket=socket.create_connection(local_address, timeout=2.0)
+        except (socket.error, OverflowError, ValueError):
+            logging.warning("could not connect to %s:%d" % local_address)
+            #if it could not connect, tell the bot on the the other it could not connect
+            self.send_connect_ack(key, "failure", jid)
+            return
             
-            logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
-            self.send_connect_ack(key, "success", jid)
-            self.create_client_socket(key, connected_socket)
+        logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
+        bot=self.send_connect_ack(key, "success", jid)
+        self.create_client_socket(key, connected_socket)
 
-    def create_client_socket(self, key, socket):
-        self.client_sockets[key] = client_socket(self, key, socket)
-        self.client_sockets[key].run()
+    def create_client_socket(self, key, socket): 
+        with self.client_sockets_lock:
+            self.client_sockets[key] = client_socket(self, key, socket)
+            self.client_sockets[key].run()
 
     def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
         self.server_sockets[local_address]=server_socket(self, local_address, peer, remote_address)
         self.server_sockets[local_address].run_thread.start()
         
-    def delete_socket(self, key):     
+    def delete_socket(self, key):
+        if not key in self.client_sockets:
+            return            
         with self.client_sockets_lock:
             del(self.client_sockets[key])
             logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])

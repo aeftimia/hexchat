@@ -47,8 +47,6 @@ Use the --debug flag to run the program in debug mode:
 
 python hexchat.py --debug --logfile ...
 
-Use the --num_logins flag to set the number of times the program should login to each account. This may or may not improve bandwidth, but the option is there. The default is to login once to each account.
-
 ------------------------------------------------------------------------------------------
 
 Example:
