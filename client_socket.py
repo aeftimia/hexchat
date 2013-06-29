@@ -69,6 +69,7 @@ class client_socket():
 
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
+        self.master.client_sockets_lock.release()
             
     def buffer_message_thread(self, iq_id, data):
         with self.writing_lock:     
@@ -115,21 +116,19 @@ class client_socket():
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""
         with self.running_lock:
-            self._handle_close(send_disconnect)
-
-    def _handle_close(self, send_disconnect=False):
-        if not self.running:
-            return
-        self.running=False
-        self.reading=False
-        self.writing=False
-        (local_address, remote_address)=(self.key[0], self.key[2])
-        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.close()
-        if self.key in self.master.client_sockets:
-            self.master.delete_socket(self.key)
-            if send_disconnect:
-                self.master.send_disconnect(self.key, self.get_id(), self.get_alias())
+            if not self.running:
+                return
+            self.running=False
+            self.reading=False
+            self.writing=False
+            (local_address, remote_address)=(self.key[0], self.key[2])
+            logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+            self.close()
+            with self.master.client_sockets_lock:
+                if self.key in self.master.client_sockets:
+                    self.master.delete_socket(self.key)
+                    if send_disconnect:
+                        self.master.send_disconnect(self.key, self.get_id(), self.get_alias())
 
     #overwrites of asyncore methods
     def send(self, data):
