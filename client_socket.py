@@ -180,4 +180,3 @@ class client_socket():
         except socket.error as why:
             if why.args[0] not in (asyncore.ENOTCONN, asyncore.EBADF):
                 raise
-
