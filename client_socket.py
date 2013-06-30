@@ -52,16 +52,25 @@ class client_socket():
             with self.reading_lock:
                 if not self.reading:
                     return
+                    
+                then=time.time()
                 data=self.recv(RECV_RATE)
                 if data:
-                    #start a new thread because sleekxmpp uses an RLock for blocking sends
-                    self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias())
+                    self.send_message(data)
                 else:
                     self.stop_writing()
                     self.handle_close(True)
                     return
-            time.sleep(THROTTLE_RATE)
+                    
+            dtime=time.time()-then
+            if dtime<THROTTLE_RATE:
+                time.sleep(THROTTLE_RATE-dtime)
 
+    def send_message(self, data):
+        iq_id=self.get_id()
+        str_data=base64.b64encode(data).decode("UTF-8")
+        self.master.send_data(self.key, str_data, iq_id, self.get_alias())
+        
     def buffer_message(self, iq_id, data):
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
         self.master.client_sockets_lock.release()

@@ -15,7 +15,6 @@ KARMA_RESET=10.0 #seconds
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
-        self._send_lock=threading.Lock()
         self.karma=0.0
         self.time_last_sent=time.time()
         self.karma_lock=threading.Lock()

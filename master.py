@@ -90,7 +90,7 @@ class master():
 
         self.bot_index=0
 
-        while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
+        while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
             time.sleep(1.0)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
@@ -334,8 +334,7 @@ class master():
         str_data=tostring(iq.xml, top_level=True)
         bot.karma_lock.acquire()
         bot.set_karma(len(str_data))
-        with bot._send_lock:
-            bot.send_raw(str_data, now=True)
+        bot.send_queue.put(str_data)
             
         
     def send_connect_iq(self, key):
@@ -375,7 +374,6 @@ class master():
     def send(self, data):
         str_data = tostring(data.xml, top_level=True)
         num_bytes=len(str_data)
-        
         selected_bot=self.bots[0]
         selected_bot_karma=selected_bot.get_karma()
         for bot in self.bots[1:]:
@@ -387,11 +385,9 @@ class master():
                     selected_bot_karma=karma
             else:
                 bot.karma_lock.release()
-                    
-
+                
         selected_bot.set_karma(num_bytes)
-        with selected_bot._send_lock:
-            selected_bot.send_raw(str_data, now=True)
+        selected_bot.send_queue.put(str_data)
 
     ### Methods for connection/socket creation.
 
