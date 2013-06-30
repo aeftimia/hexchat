@@ -2,15 +2,14 @@ import asyncore
 import base64
 import logging
 import socket
-#import time
+import time
 import threading
 
 RECV_RATE=2**15 #bytes
-#MAX_BANDWIDTH=300*10**3 #bytes/second
 MAX_ID=2**32-1
 MAX_ID_DIFF=2**10
+THROTTLE_RATE=0.1
 
-#THROTTLE_RATE=float(RECV_RATE)/MAX_BANDWIDTH
 
 class client_socket():
     def __init__(self, master, key, socket):
@@ -55,29 +54,25 @@ class client_socket():
             with self.reading_lock:
                 if not self.reading:
                     return
-                    
-            data=self.recv(RECV_RATE)
-            
-            with self.reading_lock:
-                if not self.reading:
-                    return
-                
+                data=self.recv(RECV_RATE)
                 if data:
                     #start a new thread because sleekxmpp uses an RLock for blocking sends
                     self.master.send_data(self.key, base64.b64encode(data).decode("UTF-8"), self.get_id(), self.get_alias())
                 else:
+                    self.stop_writing()
                     self.handle_close(True)
                     return
-            #time.sleep(THROTTLE_RATE)
+            time.sleep(THROTTLE_RATE)
 
     def buffer_message(self, iq_id, data):
-        if data=="disconnect":
-            with self.disconnect_lock:
-                self.disconnect_id=iq_id
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
         self.master.client_sockets_lock.release()
             
     def buffer_message_thread(self, iq_id, data):
+        if data=="disconnect":
+            with self.disconnect_lock:
+                self.disconnect_id=iq_id
+                
         with self.writing_lock:     
             if not self.writing:
                 return
@@ -86,6 +81,8 @@ class client_socket():
             id_diff=raw_id_diff%MAX_ID
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
+                self.stop_reading()
+                self.writing=False
                 self.handle_close(True)
                 return
 
@@ -102,6 +99,7 @@ class client_socket():
             while self.incomming_messages and self.incomming_messages[0]!=None:
                 data=self.incomming_messages.pop(0)
                 if data=="disconnect":
+                    self.writing=False
                     self.handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
@@ -114,8 +112,7 @@ class client_socket():
                 while data:   
                     bytes=self.send(data)
                     if bytes==None:
-                        with self.reading_lock:
-                            self.reading=False
+                        self.stop_reading()
                         self.writing=False
                         self.handle_close(True)
                         return
@@ -125,12 +122,28 @@ class client_socket():
         #stop the socket from reading more data immediately
         #if a valid disconnect was received
         with self.disconnect_lock:
-            if self.disconnect_id!=None:
-                raw_id_diff=self.disconnect_id-self.last_id_received
-                id_diff=raw_id_diff%MAX_ID
-                if not (raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF):
-                    with self.reading_lock:
-                        self.reading=False
+            if self.disconnect_id==None:
+                return
+            raw_id_diff=self.disconnect_id-self.last_id_received
+            id_diff=raw_id_diff%MAX_ID
+            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
+                return
+            self.stop_reading()
+            self.disconnect_id=None
+
+    def stop_reading(self):
+        threading.Thread(name="stop reading %d"%hash(self.key), target=lambda: self.stop_reading_thread()).start()
+        
+    def stop_reading_thread(self):
+        with self.reading_lock:
+            self.reading=False
+
+    def stop_writing(self):
+        threading.Thread(name="stop writing %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()
+
+    def stop_writing_thread(self):
+        with self.writing_lock:
+            self.writing=False
 
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""
@@ -138,8 +151,6 @@ class client_socket():
             if not self.running:
                 return
             self.running=False
-            self.reading=False
-            self.writing=False
             (local_address, remote_address)=(self.key[0], self.key[2])
             logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
             self.close()

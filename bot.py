@@ -16,10 +16,9 @@ class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
         self._send_lock=threading.Lock()
-        self.karma_lock=threading.Lock()
         self.karma=0.0
         self.time_last_sent=time.time()
-        self.done_time=self.time_last_sent
+        self.karma_lock=threading.Lock()
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
       
         # gmail xmpp server is actually at talk.google.com
@@ -45,7 +44,7 @@ class bot(sleekxmpp.ClientXMPP):
         dtime=now-self.time_last_sent
         if dtime>KARMA_RESET:
             self.karma=num_bytes
-        else: #compute weighted average
+        else: #compute moving average
               #note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
               #and as dtime-->0, the new self.karma-->num_bytes+self.karma
             self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)

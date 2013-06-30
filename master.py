@@ -151,6 +151,7 @@ class master():
     #incomming xml handlers
 
     def error_handler(self, iq):
+        logging.warn(tostring(iq.xml))
         with self.peer_resources_lock:
             try:
                 del(self.peer_resources[iq['from'].bare])
@@ -245,7 +246,7 @@ class master():
             return
         except KeyError:
             iq=iq['packet']
-            logging.warn("%s:%s received data from %s:%s, but is not connected." % (iq['remote_ip'],iq['remote_port'],iq['local_ip'],iq['local_port']))
+            logging.warn("%s:%s received %d bytes from %s:%s, but is not connected." % (iq['remote_ip'],iq['remote_port'],len(iq['data']),iq['local_ip'],iq['local_port']))
             return
 
         try:
