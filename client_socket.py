@@ -8,7 +8,7 @@ import threading
 RECV_RATE=2**15 #bytes
 #MAX_BANDWIDTH=300*10**3 #bytes/second
 MAX_ID=2**32-1
-MAX_ID_DIFF=100
+MAX_ID_DIFF=2**10
 
 #THROTTLE_RATE=float(RECV_RATE)/MAX_BANDWIDTH
 

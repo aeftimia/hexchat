@@ -164,16 +164,17 @@ class master():
             except KeyError:
                 pass
 
-        with self.client_sockets_lock:
-            for key in self.client_sockets:
-                if iq['from'].full in self.client_sockets[key].aliases:
-                    if len(self.client_sockets[key].aliases)>1:
-                        with self.client_sockets[key].alias_lock:
-                            self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
-                        with self.client_sockets[key].id_lock:
-                            self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
-                    else:
-                        self.close_socket(key)
+        self.client_sockets_lock.acquire()
+        for key in self.client_sockets:
+            if iq['from'].full in self.client_sockets[key].aliases:
+                if len(self.client_sockets[key].aliases)>1:
+                    with self.client_sockets[key].alias_lock:
+                        self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
+                    with self.client_sockets[key].id_lock:
+                        self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
+                else:
+                    self.close_socket(key)
+        self.client_sockets_lock.release()
 
     def connect_handler(self, msg):          
         try:
@@ -230,6 +231,7 @@ class master():
         except ValueError:
             logging.warn("received bad id. Disconnecting")
             self.close_socket(key)
+            self.client_sockets_lock.release()
             return
 
         self.client_sockets[key].buffer_message(iq_id, "disconnect")
@@ -251,6 +253,7 @@ class master():
         except ValueError:
             logging.warn("received bad id. Disconnecting")
             self.close_socket(key)
+            self.client_sockets_lock.release()
             return
 
         try:
@@ -261,6 +264,7 @@ class master():
             #bad data can only mean trouble
             #silently disconnect
             self.close_socket(key)
+            self.client_sockets_lock.release()
             return
 
         self.client_sockets[key].buffer_message(iq_id, data)
@@ -466,7 +470,6 @@ class master():
 
     def close_socket(self, key):
         threading.Thread(name="close %d"%hash(key), target=lambda: self.client_sockets[key].handle_close()).start()
-        self.client_sockets_lock.release()
         
     def delete_socket(self, key):     
         del(self.client_sockets[key])
