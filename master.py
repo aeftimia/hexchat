@@ -246,7 +246,7 @@ class master():
             return
         except KeyError:
             iq=iq['packet']
-            logging.warn("%s:%s received %d bytes from %s:%s, but is not connected." % (iq['remote_ip'],iq['remote_port'],len(iq['data']),iq['local_ip'],iq['local_port']))
+            logging.warn("%s:%s received %d bytes from %s:%s, but is not connected." % (iq['remote_ip'],iq['remote_port'],len(iq['data'])/2,iq['local_ip'],iq['local_port']))
             return
 
         try:

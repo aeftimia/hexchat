@@ -28,8 +28,6 @@ class client_socket():
         self.alias_lock=threading.Lock()
         self.id=0
         self.id_lock=threading.Lock()
-        self.disconnect_id=None
-        self.disconnect_lock=threading.Lock()
         socket.setblocking(1)
         self.socket=socket
 
@@ -69,9 +67,8 @@ class client_socket():
         self.master.client_sockets_lock.release()
             
     def buffer_message_thread(self, iq_id, data):
-        if data=="disconnect":
-            with self.disconnect_lock:
-                self.disconnect_id=iq_id
+        if data=="disconnect": #no need for validation since a bad ID leads to the same result
+            self.stop_reading()
                 
         with self.writing_lock:     
             if not self.writing:
@@ -95,7 +92,6 @@ class client_socket():
             self.incomming_messages[id_diff]=data
             logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
 
-            self.check_disconnect()
             while self.incomming_messages and self.incomming_messages[0]!=None:
                 data=self.incomming_messages.pop(0)
                 if data=="disconnect":
@@ -103,11 +99,6 @@ class client_socket():
                     self.handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
-                #always check disconnect with each change in self.last_id_received
-                #since this is never done in parallel, acquiring the disconnect lock
-                #should not waste too much time
-                self.check_disconnect()
-                
                 logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
                 while data:   
                     bytes=self.send(data)
@@ -117,19 +108,6 @@ class client_socket():
                         self.handle_close(True)
                         return
                     data=data[bytes:]
-
-    def check_disconnect(self):
-        #stop the socket from reading more data immediately
-        #if a valid disconnect was received
-        with self.disconnect_lock:
-            if self.disconnect_id==None:
-                return
-            raw_id_diff=self.disconnect_id-self.last_id_received
-            id_diff=raw_id_diff%MAX_ID
-            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
-                return
-            self.stop_reading()
-            self.disconnect_id=None
 
     def stop_reading(self):
         threading.Thread(name="stop reading %d"%hash(self.key), target=lambda: self.stop_reading_thread()).start()
