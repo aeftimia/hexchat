@@ -5,8 +5,8 @@ import socket
 #import time
 import threading
 
-RECV_RATE=2**13 #bytes
-#MAX_BANDWIDTH=300*10**3 #b/s
+RECV_RATE=2**15 #bytes
+#MAX_BANDWIDTH=300*10**3 #bytes/second
 MAX_ID=2**32-1
 MAX_ID_DIFF=100
 
@@ -29,6 +29,8 @@ class client_socket():
         self.alias_lock=threading.Lock()
         self.id=0
         self.id_lock=threading.Lock()
+        self.disconnect_id=None
+        self.disconnect_lock=threading.Lock()
         socket.setblocking(1)
         self.socket=socket
 
@@ -55,6 +57,7 @@ class client_socket():
                     return
                     
             data=self.recv(RECV_RATE)
+            
             with self.reading_lock:
                 if not self.reading:
                     return
@@ -68,6 +71,9 @@ class client_socket():
             #time.sleep(THROTTLE_RATE)
 
     def buffer_message(self, iq_id, data):
+        if data=="disconnect":
+            with self.disconnect_lock:
+                self.disconnect_id=iq_id
         threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
         self.master.client_sockets_lock.release()
             
@@ -76,17 +82,12 @@ class client_socket():
             if not self.writing:
                 return
                            
-            raw_id_diff=(iq_id-self.last_id_received)
+            raw_id_diff=iq_id-self.last_id_received
             id_diff=raw_id_diff%MAX_ID
             if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self.handle_close(True)
                 return
-
-            #stop the socket from reading more data
-            if data=="disconnect":
-                with self.reading_lock:
-                    self.reading=False
 
             logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
 
@@ -96,12 +97,19 @@ class client_socket():
 
             self.incomming_messages[id_diff]=data
             logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
+
+            self.check_disconnect()
             while self.incomming_messages and self.incomming_messages[0]!=None:
                 data=self.incomming_messages.pop(0)
                 if data=="disconnect":
                     self.handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
+                #always check disconnect with each change in self.last_id_received
+                #since this is never done in parallel, acquiring the disconnect lock
+                #should not waste too much time
+                self.check_disconnect()
+                
                 logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
                 while data:   
                     bytes=self.send(data)
@@ -112,6 +120,17 @@ class client_socket():
                         self.handle_close(True)
                         return
                     data=data[bytes:]
+
+    def check_disconnect(self):
+        #stop the socket from reading more data immediately
+        #if a valid disconnect was received
+        with self.disconnect_lock:
+            if self.disconnect_id!=None:
+                raw_id_diff=self.disconnect_id-self.last_id_received
+                id_diff=raw_id_diff%MAX_ID
+                if not (raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF):
+                    with self.reading_lock:
+                        self.reading=False
 
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""

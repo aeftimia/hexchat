@@ -14,7 +14,7 @@ from client_socket import client_socket, MAX_ID
 from server_socket import server_socket
 from bot import bot
 
-CONNECT_TIMEOUT=0.5
+CONNECT_TIMEOUT=1.0
 
 #construct key from iq
 #return key and tuple indicating whether the key
@@ -91,7 +91,7 @@ class master():
         self.bot_index=0
 
         while True in map(lambda bot: bot.boundjid.full==bot.boundjid.bare, self.bots):
-            time.sleep(0.5)
+            time.sleep(1.0)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
 
@@ -328,7 +328,7 @@ class master():
         iq.append(packet)
         str_data=tostring(iq.xml, top_level=True)
         bot.karma_lock.acquire()
-        sleep_seconds=bot.set_karma(len(str_data), time.time())
+        sleep_seconds=bot.set_karma(len(str_data))
         with bot._send_lock:
             time.sleep(sleep_seconds)
             bot.send_raw(str_data, now=True)
@@ -371,40 +371,43 @@ class master():
     def send(self, data):
         str_data = tostring(data.xml, top_level=True)
         num_bytes=len(str_data)
-        now=time.time()
-
-        time_bots=map(lambda bot: (bot.projected_wait(now), bot), self.bots) #all karma_locks are acquired and all _send_locks that can be acquired are acquired
         
-        almost_ready_time_bot=None
-        ready_time_bot=None
-        for time_bot in time_bots:
-            if time_bot[0][0]:
-                if ready_time_bot==None:
-                    ready_time_bot=time_bot
-                elif time_bot[0][1]<ready_time_bot[0][1]:
-                    ready_time_bot[1]._send_lock.release()
-                    ready_time_bot[1].karma_lock.release()
-                    ready_time_bot=time_bot
+        almost_ready_bot=None
+        ready_bot=None
+        for bot in self.bots:
+            projected_wait=bot.projected_wait()
+            if projected_wait[0]:
+                now=time.time()
+                if ready_bot==None:
+                    ready_bot=bot
+                    ready_projected_wait=projected_wait
+                elif projected_wait[2]/(now-projected_wait[1])<ready_projected_wait[2]/(now-ready_projected_wait[1]):
+                    ready_bot._send_lock.release()
+                    ready_bot.karma_lock.release()
+                    ready_bot=bot
+                    ready_projected_wait=projected_wait
                 else:
-                    time_bot[1]._send_lock.release()
-                    time_bot[1].karma_lock.release()
+                    bot._send_lock.release()
+                    bot.karma_lock.release()
             else:
-                if almost_ready_time_bot==None:
-                    almost_ready_time_bot=time_bot
-                elif time_bot[0][1]<almost_ready_time_bot[0][1]:
-                    almost_ready_time_bot[1].karma_lock.release()
-                    almost_ready_time_bot=time_bot
+                if almost_ready_bot==None:
+                    almost_ready_bot=bot
+                    almost_ready_projected_wait=projected_wait
+                elif projected_wait[1]<almost_ready_projected_wait[1]:
+                    almost_ready_bot.karma_lock.release()
+                    almost_ready_bot=bot
+                    almost_ready_projected_wait=projected_wait
                 else:
-                    time_bot[1].karma_lock.release()
+                    bot.karma_lock.release()
                     
-        if ready_time_bot!=None:
-            if almost_ready_time_bot!=None:
-                almost_ready_time_bot[1].karma_lock.release()
-            bot=ready_time_bot[1]
-            sleep_seconds=bot.set_karma(num_bytes, now)
+        if ready_bot!=None:
+            if almost_ready_bot!=None:
+                almost_ready_bot.karma_lock.release()
+            bot=ready_bot
+            sleep_seconds=bot.set_karma(num_bytes)
         else:
-            bot=almost_ready_time_bot[1]
-            sleep_seconds=bot.set_karma(num_bytes, now)
+            bot=almost_ready_bot
+            sleep_seconds=bot.set_karma(num_bytes)
             bot._send_lock.acquire()
         time.sleep(sleep_seconds)    
         bot.send_raw(str_data, now=True)
