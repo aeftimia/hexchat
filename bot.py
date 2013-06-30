@@ -10,7 +10,7 @@ from stanza_plugins import *
 Karma is defined as the average number of bytes sent over a window of KARMA_RESET
 '''
 
-MAX_RATE=10*10**3 #b/s
+MAX_RATE=20*10**3 #b/s
 KARMA_RESET=20.0 #seconds
 
 class bot(sleekxmpp.ClientXMPP):
@@ -45,8 +45,9 @@ class bot(sleekxmpp.ClientXMPP):
         if dtime>KARMA_RESET:
             self.karma=num_bytes
         else: #compute weighted average
-            self.karma=(num_bytes*(KARMA_RESET-dtime)+self.karma*dtime)/KARMA_RESET
-        self.time_last_sent=now
+              #note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
+              #and as dtime-->0, the new self.karma-->num_bytes+self.karma
+            self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)
         '''
         karma/(dtime+sleep_seconds)==MAX_RATE
         therefore,
@@ -60,7 +61,8 @@ class bot(sleekxmpp.ClientXMPP):
 
         if sleep_seconds>0:
             logging.debug("sleeping %f seconds for %d bytes" % (sleep_seconds, num_bytes))
-            
+
+        self.time_last_sent=now
         self.done_time=now+sleep_seconds
         
         self.karma_lock.release()
