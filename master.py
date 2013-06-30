@@ -222,7 +222,7 @@ class master():
             return
         except KeyError:
             iq=iq['disconnect']
-            logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (iq['remote_ip'],iq['remote_port'],iq['local_ip'],iq['local_port']))
+            logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (iq['local_ip'],iq['local_port'],iq['remote_ip'],iq['remote_port']))
             return
             
         #client wants to disconnect                    
@@ -332,9 +332,8 @@ class master():
         iq.append(packet)
         str_data=tostring(iq.xml, top_level=True)
         bot.karma_lock.acquire()
-        sleep_seconds=bot.set_karma(len(str_data))
+        bot.set_karma(len(str_data))
         with bot._send_lock:
-            time.sleep(sleep_seconds)
             bot.send_raw(str_data, now=True)
             
         
@@ -376,46 +375,22 @@ class master():
         str_data = tostring(data.xml, top_level=True)
         num_bytes=len(str_data)
         
-        almost_ready_bot=None
-        ready_bot=None
-        for bot in self.bots:
-            projected_wait=bot.projected_wait()
-            if projected_wait[0]:
-                now=time.time()
-                if ready_bot==None:
-                    ready_bot=bot
-                    ready_projected_wait=projected_wait
-                elif projected_wait[2]/(now-projected_wait[1])<ready_projected_wait[2]/(now-ready_projected_wait[1]):
-                    ready_bot._send_lock.release()
-                    ready_bot.karma_lock.release()
-                    ready_bot=bot
-                    ready_projected_wait=projected_wait
-                else:
-                    bot._send_lock.release()
-                    bot.karma_lock.release()
+        selected_bot=self.bots[0]
+        selected_bot_karma=selected_bot.get_karma()
+        for bot in self.bots[1:]:
+            karma=bot.get_karma()
+            now=time.time()
+            if karma[1]/(now-karma[0])<selected_bot_karma[1]/(now-selected_bot_karma[0]):
+                    selected_bot.karma_lock.release()
+                    selected_bot=bot
+                    selected_bot_karma=karma
             else:
-                if almost_ready_bot==None:
-                    almost_ready_bot=bot
-                    almost_ready_projected_wait=projected_wait
-                elif projected_wait[1]<almost_ready_projected_wait[1]:
-                    almost_ready_bot.karma_lock.release()
-                    almost_ready_bot=bot
-                    almost_ready_projected_wait=projected_wait
-                else:
-                    bot.karma_lock.release()
+                bot.karma_lock.release()
                     
-        if ready_bot!=None:
-            if almost_ready_bot!=None:
-                almost_ready_bot.karma_lock.release()
-            bot=ready_bot
-            sleep_seconds=bot.set_karma(num_bytes)
-        else:
-            bot=almost_ready_bot
-            sleep_seconds=bot.set_karma(num_bytes)
-            bot._send_lock.acquire()
-        time.sleep(sleep_seconds)    
-        bot.send_raw(str_data, now=True)
-        bot._send_lock.release()
+
+        selected_bot.set_karma(num_bytes)
+        with selected_bot._send_lock:
+            selected_bot.send_raw(str_data, now=True)
 
     ### Methods for connection/socket creation.
 

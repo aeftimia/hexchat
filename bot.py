@@ -10,8 +10,7 @@ from stanza_plugins import *
 Karma is defined as the average number of bytes sent over a window of KARMA_RESET
 '''
 
-MAX_RATE=2**18 #bytes/second
-KARMA_RESET=1.0 #seconds
+KARMA_RESET=10.0 #seconds
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
@@ -50,37 +49,14 @@ class bot(sleekxmpp.ClientXMPP):
               #note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
               #and as dtime-->0, the new self.karma-->num_bytes+self.karma
             self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)
-        '''
-        karma/(dtime+sleep_seconds)==MAX_RATE
-        therefore,
-        sleep_seconds==karma/MAX_RATE-dtime
-        '''
-        sleep_seconds=self.karma/MAX_RATE-dtime
-        if sleep_seconds<0:
-            sleep_seconds=0
-        elif sleep_seconds>KARMA_RESET:
-            sleep_seconds=KARMA_RESET
 
-        if sleep_seconds>0:
-            logging.debug("sleeping %f seconds for %d bytes" % (sleep_seconds, num_bytes))
-
-        self.time_last_sent=now
-        
-        if now>self.done_time:
-            self.done_time=now+sleep_seconds
-        else:
-            self.done_time+=sleep_seconds
-        
+        self.time_last_sent=now        
         self.karma_lock.release()
-        return sleep_seconds
 
 
-    def projected_wait(self):
+    def get_karma(self):
         self.karma_lock.acquire()
-        if self._send_lock.acquire(False): #these locks will be released later
-            return (True, self.karma, self.time_last_sent)
-        else:
-            return (False, self.done_time)
+        return (self.karma, self.time_last_sent)
 
     def register_hexchat_handlers(self):
         #these handle the custom iq stanzas
