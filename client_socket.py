@@ -92,14 +92,14 @@ class client_socket():
                 self.handle_close(True)
                 return
 
-            logging.debug("connection %s received data from " % self.key[0] + "%s:%d" % self.key[2])
+            logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
 
             #place None in empty buffer elements
             while id_diff>=len(self.incomming_messages):
                 self.incomming_messages.append(None)
 
             self.incomming_messages[id_diff]=data
-            logging.debug("connection %s looking for id:" % self.key[0]+str(self.last_id_received))
+            logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
 
             while self.incomming_messages and self.incomming_messages[0]!=None:
                 data=self.incomming_messages.pop(0)
@@ -108,7 +108,7 @@ class client_socket():
                     self.handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
-                logging.debug("connection %s now looking for id:" % self.key[0]+str(self.last_id_received))
+                logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
                 while data:   
                     bytes=self.send(data)
                     if bytes==None:
@@ -119,14 +119,14 @@ class client_socket():
                     data=data[bytes:]
 
     def stop_reading(self):
-        threading.Thread(name="stop reading %d" % hash(self.key), target=lambda: self.stop_reading_thread()).start()
+        threading.Thread(name="stop reading %d"%hash(self.key), target=lambda: self.stop_reading_thread()).start()
         
     def stop_reading_thread(self):
         with self.reading_lock:
             self.reading=False
 
     def stop_writing(self):
-        threading.Thread(name="stop writing %d" % hash(self.key), target=lambda: self.stop_writing_thread()).start()
+        threading.Thread(name="stop writing %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()
 
     def stop_writing_thread(self):
         with self.writing_lock:
@@ -138,8 +138,8 @@ class client_socket():
             if not self.running:
                 return
             self.running=False
-            (connection_id, remote_address)=(self.key[0], self.key[2])
-            logging.debug("disconnecting connection %s from " % connection_id + "%s:%d" % remote_address)
+            (local_address, remote_address)=(self.key[0], self.key[2])
+            logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
             self.close()
             with self.master.client_sockets_lock:
                 if self.key in self.master.client_sockets:

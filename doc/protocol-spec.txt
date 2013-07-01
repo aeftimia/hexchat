@@ -3,7 +3,7 @@ hexchat
 0. Protocol Overview
 This protocol uses an xmpp chat service as a means to forward tcp traffic from one computer to another. It listens on a port on one computer and forwards data through a chat server to another computer logged into the same chat server. 
 
-All data concerning the connection id, remote ip:port, and various JIDs the computer is using to access the chat server are put in individual stanzas. This information is present in every xmpp message exchanged between hexchat bots and will be collectively referred to as the "header", and is used to construct a key in the bot's routing table. The values in the routing table are sockets. Unless stated otherwise, each xmpp message described in this docuement should be assumed to contain a header. Furthermore, the header should be assumed to be enclosed in the child of the root xml element (which can be assumed to have no siblings). This is illustrated below:
+All data concerning the local ip:port, remote ip:port, and various JIDs the computer is using to access the chat server are put in individual stanzas. This information is present in every xmpp message exchanged between hexchat bots and will be collectively referred to as the "header", and is used to construct a key in the bot's routing table. The values in the routing table are sockets. Unless stated otherwise, each xmpp message described in this docuement should be assumed to contain a header. Furthermore, the header should be assumed to be enclosed in the child of the root xml element (which can be assumed to have no siblings). This is illustrated below:
 <iq....>
     <only_child...>
        header stanzs
@@ -21,16 +21,16 @@ a. The client sends a connection request to the server
 When a client initiates a connection to an ip:port running hexchat:
 i)	A connection request is sent to the appropriate JID on the chat server. If the full JID of the recipient is known, the the connection request is sent in an IQ stanza with its type set to "set", otherwise it is sent in a message stanza with its type set to "chat".
 ii)	A stanza called "connect" is created within the stanza created in (i). The "connect" stanza's xmlns is set to "hexchat:connect". The client creates an entry in its table of pending connections with the following key-value pair:
-(connection id, bare JID of the recipient of the connection request, (remote ip, remote port)) ==> connected socket
+((local ip, local port), bare JID of the recipient of the connection request, (remote ip, remote port)) ==> connected socket
 iii)	A comma separated list of JIDs the bot has used to connect to the chat server is included an "aliases" stanza inside the "connect" stanza
 iv)	The IQ or message stanza is sent over the chat server
 
 b. The server acknowledges the request and indicates whether the connection succeeded
-When a bot recieves a connection request, it first checks that the "from" field is in the "aliases" stanza of the header for security. The bot then constructs a key from the header. If that key is not in its routing table, it tries to connect to the appropriate ip:port specified in the "remote_ip" and "remote_port" stanzas in the header. The server then sends back an IQ stanza with its type set to "result". This stanza contains a "connect_ack" stanza with its xmlns set to "hexchat:connect_ack". The "connect_ack" stanza contains a "id" stanza. If the connection succeeded, the "response" stanza contains the string "success", otherwise, it contains the string "failure". If the connection succeeded, a comma separated list of JIDs the bot has used to connect to the chat server is included an "aliases" stanza inside the "connect_ack" stanza.
+When a hexchat bot recieves a connection request, the bot constructs a key from the header. If that key is not in its routing table, it tries to connect to the appropriate ip:port specified in the "remote_ip" and "remote_port" stanzas in the header. The server then sends back an IQ stanza with its type set to "result". This stanza contains a "connect_ack" stanza with its xmlns set to "hexchat:connect_ack". The "connect_ack" stanza contains a "id" stanza. If the connection succeeded, the "response" stanza contains the string "success", otherwise, it contains the string "failure". If the connection succeeded, a comma separated list of JIDs the bot has used to connect to the chat server is included an "aliases" stanza inside the "connect_ack" stanza.
 
 c. The client recieves a connection acknowledgement
-When a bot recieves a connection request, it first checks that the "from" field is in the "aliases" stanza of the header for security. The bot then checks to see if any key composed of the remote ip and port, connection identifier, and a JID found in the aliases stanza (all of which are specified in stanzas in the header) matches a key in its table of pending connections. If it finds key that matches a key in its pending connections table and the "response" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
-(connection id, set of aliases specified in the "aliases" stanza, (remote ip, remote port)) ==> socket
+When a bot recieves a "connect_ack" stanza enclosed in the appropriate IQ, it checks to see if any key composed of the remote ip and port, local ip and port, and a JID found in the aliases stanza (all of which are specified in stanzas in the header) matches a key in its table of pending connections. If it finds key that matches a key in its pending connections table and the "response" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
+((local ip, local port), set of aliases specified in the "aliases" stanza, (remote ip, remote port)) ==> socket
 
 If the response stanza reads "failure" it closes the socket in the pending connections table and deletes the entry from the pending connections table. Otherwise, bot stores the value in the "response" stanza for later use.
 
@@ -68,7 +68,8 @@ iii)	Add the string "disconnect" to the appropriate index in the socket's messag
 6. Header Stanzas
 The header stanzas contain the following stanzas:
 stanza		==>	text
-connection_id	==>	SHA512 hash local ip and port
+local_ip	==>	local ip
+local_port	==>	local port
 remote_ip	==>	remote ip
 remote_port	==>	remote port
 
