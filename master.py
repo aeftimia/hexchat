@@ -16,28 +16,22 @@ from bot import bot
 
 CONNECT_TIMEOUT=1.0
 
-#construct key from iq
-#return key and tuple indicating whether the key
-#is in the client_sockets dict
-def iq_to_key(iq):
-    if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
-        #these ports are way too long
-        raise(ValueError)
-        
-    local_port=int(iq['remote_port'])
-    remote_port=int(iq['local_port'])
             
-    local_ip=iq['remote_ip']
-    remote_ip=iq['local_ip']
+def check_aliases_and_port(aliases, remote_port, mfrom):
+    aliases=frozenset(aliases.split(','))
+    if not mfrom in aliases:
+        logging.warn('received message from a JID that did not include itself in its aliases')
+        return False
+            
+    try:
+        if len(remote_port)>6:
+            raise ValueError
+        remote_port=int(remote_port)
+    except ValueError:
+        logging.warn('received bad port')
+        return False
 
-    local_address=(local_ip, local_port)
-    remote_address=(remote_ip,remote_port)
-
-    aliases=frozenset(iq['aliases'].split(','))
-    
-    key=(local_address, aliases, remote_address)
-    
-    return key
+    return (aliases, remote_port)
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
@@ -93,20 +87,17 @@ class master():
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
             time.sleep(1.0)
 
-        self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+        self.aliases=",".join(map(lambda bot: bot.boundjid.full, self.bots)) 
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
             
-    #turn local address and remote address into xml stanzas in the given element tree
-    def format_header(self, local_address, remote_address, xml):       
-        local_ip_stanza=ElementTree.Element("local_ip")
-        local_ip_stanza.text=local_address[0]
-        xml.append(local_ip_stanza)      
-              
-        local_port_stanza=ElementTree.Element("local_port")
-        local_port_stanza.text=str(local_address[1])
-        xml.append(local_port_stanza)
+    #misc methods for manipulating messages
+    
+    def format_header(self, connection_id, remote_address, xml):       
+        connection_id_stanza=ElementTree.Element("connection_id")
+        connection_id_stanza.text=connection_id
+        xml.append(connection_id_stanza)
         
         remote_ip_stanza=ElementTree.Element("remote_ip")
         remote_ip_stanza.text=remote_address[0]
@@ -120,38 +111,34 @@ class master():
 
     def add_aliases(self, xml):
         aliases_stanza=ElementTree.Element("aliases")
-        aliases_stanza.text=",".join(self.aliases)
+        aliases_stanza.text=self.aliases
         xml.append(aliases_stanza)
 
         return xml
 
     def iq_to_key(self, iq, jid):
-        if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
-            #these ports are way too long
+        if len(iq['remote_port'])>6:
+            #this port is way too long
             raise(ValueError)
         
-        local_port=int(iq['remote_port'])
-        remote_port=int(iq['local_port'])
-            
-        local_ip=iq['remote_ip']
-        remote_ip=iq['local_ip']
+        remote_port=int(iq['remote_port'])
+        remote_ip=iq['remote_ip']
 
-        local_address=(local_ip, local_port)
-        remote_address=(remote_ip,remote_port)
-
-        self.client_sockets_lock.acquire()
+        remote_address=(remote_ip, remote_port)
         
+        self.client_sockets_lock.acquire()
         for key in self.client_sockets:
-            if jid in key[1] and local_address==key[0] and remote_address==key[2]:
+            if jid in key[1] and iq['connection_id']==key[0] and remote_address==key[2]:
                 return key
 
         self.client_sockets_lock.release()       
         raise KeyError
-            
+
     #incomming xml handlers
 
     def error_handler(self, iq):
-        logging.warn(tostring(iq.xml))
+        logging.warn("%s not available."%iq['from'].full)
+        
         with self.peer_resources_lock:
             try:
                 del(self.peer_resources[iq['from'].bare])
@@ -178,22 +165,21 @@ class master():
         self.client_sockets_lock.release()
 
     def connect_handler(self, msg):          
-        try:
-            key=iq_to_key(msg['connect'])
-        except ValueError:
-            logging.warn('received bad port')
+        aliases_and_remote_port=check_aliases_and_port(msg['connect']['aliases'], msg['connect']['remote_port'], msg['from'].full)
+        if not aliases_and_remote_port:
             return
+        (aliases, remote_port)=aliases_and_remote_port
         
+        key=(msg['connect']['connection_id'], aliases, (msg['connect']['remote_ip'], remote_port))
         threading.Thread(name="initate connection %d" % hash(key), target=lambda: self.initiate_connection(key, msg['to'])).start() 
 
     def connect_ack_handler(self, iq):
-        try:
-            key=iq_to_key(iq['connect_ack'])
-        except ValueError:
-            logging.warn('received bad port')
+        aliases_and_remote_port=check_aliases_and_port(iq['connect_ack']['aliases'], iq['connect_ack']['remote_port'], iq['from'].full)
+        if not aliases_and_remote_port:
             return
+        (aliases, remote_port)=aliases_and_remote_port
 
-        key0=(key[0], iq['from'].bare, key[2])
+        key0=(iq['connect_ack']['connection_id'], iq['from'].bare, (iq['connect_ack']['remote_ip'], remote_port))
            
         with self.pending_connections_lock:
             if not key0 in self.pending_connections:
@@ -203,7 +189,7 @@ class master():
             with self.peer_resources_lock:
                 self.peer_resources[key0[1]]=iq['from'].full
             
-            logging.debug("%s:%d received connection result: " % key[0] + iq['connect_ack']['response'] + " from %s:%d" % key[2])
+            logging.debug("connection %s received connection result: " % key0[0] + " %s" % iq['connect_ack']['response'] + " from %s:%d" % key0[2])
             if iq['connect_ack']['response']=="failure":
                 self.pending_connections[key0].close()
                 del(self.pending_connections[key0])
@@ -212,7 +198,7 @@ class master():
                 socket=self.pending_connections.pop(key0)
                 
         with self.client_sockets_lock:
-            self.create_client_socket(key, socket)
+            self.create_client_socket((key0[0], aliases, key0[2]), socket)
 
     def disconnect_handler(self, iq):
         """Handles incoming xmpp iqs for disconnections"""
@@ -223,7 +209,7 @@ class master():
             return
         except KeyError:
             iq=iq['disconnect']
-            logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (iq['local_ip'],iq['local_port'],iq['remote_ip'],iq['remote_port']))
+            logging.warn("connection %s seemed to forge a disconnect to %s:%s." % (iq['connection_id'],iq['remote_ip'],iq['remote_port']))
             return
             
         #client wants to disconnect                    
@@ -246,7 +232,7 @@ class master():
             return
         except KeyError:
             iq=iq['packet']
-            logging.warn("%s:%s received %d bytes from %s:%s, but is not connected." % (iq['remote_ip'],iq['remote_port'],len(iq['data'])/2,iq['local_ip'],iq['local_port']))
+            logging.warn("%s:%s received %d bytes from connection %s, but is not connected." % (iq['remote_ip'],iq['remote_port'],len(iq['data'])/2,iq['connection_id']))
             return
 
         try:
@@ -261,7 +247,7 @@ class master():
             #extract data, ignoring bytes we already received
             data=base64.b64decode(iq['packet']['data'].encode("UTF-8"))
         except (UnicodeDecodeError, TypeError, ValueError):
-            logging.warn("%s:%d received invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
+            logging.warn("connection %s received invalid data from " % key[0] + "%s:%d. Silently disconnecting." % key[2])
             #bad data can only mean trouble
             #silently disconnect
             self.close_socket(key)
@@ -273,8 +259,8 @@ class master():
     #methods for sending xml
 
     def send_data(self, key, data, iq_id, alias):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
+        (connection_id, remote_address)=(key[0], key[2])
+        packet=self.format_header(connection_id, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
 
         id_stanza=ElementTree.Element('id')
@@ -286,7 +272,6 @@ class master():
         packet.append(data_stanza)
 
         iq=Iq()
-        #iq['from']=bot.boundjid.full
         iq['to']=alias
         iq['type']='set'
         iq.append(packet)
@@ -294,10 +279,10 @@ class master():
         self.send(iq)
 
     def send_disconnect(self, key, iq_id, alias):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
+        (connection_id, remote_address)=(key[0], key[2])
+        packet=self.format_header(connection_id, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
-        logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
+        logging.debug("connection %s" % connection_id + " sending disconnect request to %s:%d" % remote_address)
 
         id_stanza=ElementTree.Element('id')
         id_stanza.text=str(iq_id)
@@ -305,7 +290,6 @@ class master():
         
         iq=Iq()
         iq['to']=alias
-        #iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
         
@@ -313,8 +297,8 @@ class master():
 
                 
     def send_connect_ack(self, key, response, jid):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
+        (connection_id, remote_address)=(key[0], key[2])
+        packet=self.format_header(connection_id, remote_address, ElementTree.Element("connect_ack"))
         packet.attrib['xmlns']="hexchat:connect_ack"
         response_stanza=ElementTree.Element("response")
         response_stanza.text=response
@@ -323,12 +307,11 @@ class master():
         if response=="success":
             packet=self.add_aliases(packet)
             
-        logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
+        logging.debug(connection_id + " sending result signal to %s:%d" % remote_address)
         
         bot=[bot for bot in self.bots if bot.boundjid.bare==jid.bare][0]
         iq=Iq()
         iq['to']=set(key[1]).pop()
-        #iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
         str_data=tostring(iq.xml, top_level=True)
@@ -338,42 +321,38 @@ class master():
             
         
     def send_connect_iq(self, key):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
+        (connection_id, remote_address)=(key[0], key[2])
+        packet=self.format_header(connection_id, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
 
         packet=self.add_aliases(packet)
         
-        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
+        logging.debug(connection_id + " sending connect request to %s:%d" % remote_address)
           
         iq=Iq()
         iq['to']=key[1]
-        #iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
         
         self.send(iq)   
         
     def send_connect_message(self, key):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=self.format_header(local_address, remote_address, ElementTree.Element("connect"))
+        (connection_id, remote_address)=(key[0], key[2])
+        packet=self.format_header(connection_id, remote_address, ElementTree.Element("connect"))
         packet.attrib['xmlns']="hexchat:connect"
 
         packet=self.add_aliases(packet)
                
-        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
+        logging.debug(connection_id + " sending connect request to %s:%d" % remote_address)
         
         message=Message()
         message['to']=key[1]
-        #message['from']=bot.boundjid.full
         message['type']='chat'
         message.append(packet)
         
-        self.send(message)
+        self.send(message, append_from=True)
 
-    def send(self, data):
-        str_data = tostring(data.xml, top_level=True)
-        num_bytes=len(str_data)
+    def send(self, data, append_from=False):
         selected_bot=self.bots[0]
         selected_bot_karma=selected_bot.get_karma()
         for bot in self.bots[1:]:
@@ -385,7 +364,13 @@ class master():
                     selected_bot_karma=karma
             else:
                 bot.karma_lock.release()
-                
+
+        if append_from:
+            data['from']=bot.boundjid.full
+
+        str_data = tostring(data.xml, xmlns=bot.default_ns, stream=bot, top_level=True)
+        num_bytes=len(str_data)
+            
         selected_bot.set_karma(num_bytes)
         selected_bot.send_queue.put(str_data)
 
@@ -406,18 +391,18 @@ class master():
                 else:
                     return
                 
-        (local_address, peer, remote_address)=key
+        (connection_id, peer, remote_address)=key
 
-        if self.whitelist!=None and not local_address in self.whitelist:
-            logging.warn("client sent request to connect to %s:%d" % local_address)
+        if self.whitelist!=None and not remote_address in self.whitelist:
+            logging.warn("client sent request to connect to %s:%d" % remote_address)
             self.send_connect_ack(key, "failure", jid)
             return
                 
         try: # connect to the ip:port
-            logging.debug("trying to connect to %s:%d" % local_address)
-            connected_socket=socket.create_connection(local_address, timeout=CONNECT_TIMEOUT)
+            logging.debug("trying to connect to %s:%d" % remote_address)
+            connected_socket=socket.create_connection(remote_address, timeout=CONNECT_TIMEOUT)
         except (socket.error, OverflowError, ValueError):
-            logging.warning("could not connect to %s:%d" % local_address)
+            logging.warning("could not connect to %s:%d" % remote_address)
             #if it could not connect, tell the bot on the the other it could not connect
             self.send_connect_ack(key, "failure", jid)
             return
@@ -427,7 +412,7 @@ class master():
                 connected_socket.close()
                 self.send_connect_ack(key, "failure", jid)
                 return    
-            logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
+            logging.debug("creating connection with id:%s" % connection_id + " to %s:%d" % remote_address)
             self.send_connect_ack(key, "success", jid)
             self.create_client_socket(key, connected_socket)
 
@@ -445,4 +430,4 @@ class master():
         
     def delete_socket(self, key):     
         del(self.client_sockets[key])
-        logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
+        logging.debug("connection %s" % key[0] + " disconnected from %s:%d." % key[2])
