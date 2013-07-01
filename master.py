@@ -177,7 +177,11 @@ class master():
                     self.close_socket(key)
         self.client_sockets_lock.release()
 
-    def connect_handler(self, msg):          
+    def connect_handler(self, msg):
+        if not msg['from'].full in msg['connect']['aliases']:
+            logging.warn("received message with a from address that is not in its aliases")
+            return
+                    
         try:
             key=iq_to_key(msg['connect'])
         except ValueError:
@@ -187,6 +191,10 @@ class master():
         threading.Thread(name="initate connection %d" % hash(key), target=lambda: self.initiate_connection(key, msg['to'])).start() 
 
     def connect_ack_handler(self, iq):
+        if not iq['from'].full in iq['connect_ack']['aliases']:
+            logging.warn("received message with a from address that is not in its aliases")
+            return
+            
         try:
             key=iq_to_key(iq['connect_ack'])
         except ValueError:
