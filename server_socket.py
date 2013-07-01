@@ -5,9 +5,12 @@ import logging
 import socket
 import threading
 <<<<<<< HEAD
+<<<<<<< HEAD
 import time
 
 TIMEOUT=10.0 #seconds before closing a socket if it has not gotten a connect_ack
+=======
+>>>>>>> parent of 04ac4aa... listening sockets now timeout at 2.0 seconds
 =======
 >>>>>>> parent of 04ac4aa... listening sockets now timeout at 2.0 seconds
 
@@ -30,8 +33,12 @@ class server_socket(asyncore.dispatcher):
             with self.master.pending_connections_lock:
                 logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
 <<<<<<< HEAD
+<<<<<<< HEAD
                 key=(connection_id, self.peer, self.remote_address)
                 self.master.pending_connections[key]=connection
+=======
+                self.master.pending_connections[(local_address, self.peer, self.remote_address)]=connection
+>>>>>>> parent of 04ac4aa... listening sockets now timeout at 2.0 seconds
 =======
                 self.master.pending_connections[(local_address, self.peer, self.remote_address)]=connection
 >>>>>>> parent of 04ac4aa... listening sockets now timeout at 2.0 seconds
@@ -41,9 +48,13 @@ class server_socket(asyncore.dispatcher):
                 else:
                     logging.debug("sending connection request via message")
 <<<<<<< HEAD
+<<<<<<< HEAD
                     self.master.send_connect_message((connection_id, self.peer, self.remote_address)) 
 
                 threading.Thread(name="%d timeout"%hash(key), target=lambda: self.socket_timeout(key)).start()   
+=======
+                    self.master.send_connect_message((local_address, self.peer, self.remote_address))       
+>>>>>>> parent of 04ac4aa... listening sockets now timeout at 2.0 seconds
 =======
                     self.master.send_connect_message((local_address, self.peer, self.remote_address))       
 >>>>>>> parent of 04ac4aa... listening sockets now timeout at 2.0 seconds
