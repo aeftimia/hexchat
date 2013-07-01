@@ -5,10 +5,11 @@ import socket
 import time
 import threading
 
-RECV_RATE=2**15 #bytes
+RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
 MAX_ID_DIFF=2**10
 THROTTLE_RATE=0.1
+MAX_SIZE=2**15
 
 
 class client_socket():
@@ -28,11 +29,13 @@ class client_socket():
         self.alias_lock=threading.Lock()
         self.id=0
         self.id_lock=threading.Lock()
+        self.buffer=b''
         socket.setblocking(1)
         self.socket=socket
 
     def run(self):
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
+        threading.Thread(name="check buffer %d" % hash(self.key), target=lambda: self.check_buffer()).start()
 
     def get_alias(self):
         with self.alias_lock:
@@ -49,23 +52,45 @@ class client_socket():
     #check client sockets for buffered data
     def read_socket(self):
         while True:
+            buffer_too_big=False
+            with self.reading_lock:
+                if not self.reading:
+                    return
+                if len(self.buffer)>=MAX_SIZE:
+                    buffer_too_big=True
+
+            if buffer_too_big:
+                time.sleep(THROTTLE_RATE)
+                continue
+                    
+            data=self.recv(RECV_RATE)
             with self.reading_lock:
                 if not self.reading:
                     return
                     
-                then=time.time()
-                data=self.recv(RECV_RATE)
                 if data:
-                    self.send_message(data)
+                    self.buffer+=data
                 else:
+                    self.reading=False
                     self.stop_writing()
                     self.handle_close(True)
                     return
+
+    def check_buffer(self):
+        while True:
+            then=time.time()
+            with self.reading_lock:
+                if not self.reading:
+                    return
+                    
+                if self.buffer:
+                    self.send_message(self.buffer[:MAX_SIZE])
+                    self.buffer=self.buffer[MAX_SIZE:]
                     
             dtime=time.time()-then
             if dtime<THROTTLE_RATE:
                 time.sleep(THROTTLE_RATE-dtime)
-
+                    
     def send_message(self, data):
         iq_id=self.get_id()
         str_data=base64.b64encode(data).decode("UTF-8")

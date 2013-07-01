@@ -286,7 +286,6 @@ class master():
         packet.append(data_stanza)
 
         iq=Iq()
-        #iq['from']=bot.boundjid.full
         iq['to']=alias
         iq['type']='set'
         iq.append(packet)
@@ -305,7 +304,6 @@ class master():
         
         iq=Iq()
         iq['to']=alias
-        #iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
         
@@ -328,7 +326,7 @@ class master():
         bot=[bot for bot in self.bots if bot.boundjid.bare==jid.bare][0]
         iq=Iq()
         iq['to']=set(key[1]).pop()
-        #iq['from']=bot.boundjid.full
+        iq['from']=bot.boundjid.full
         iq['type']='result'
         iq.append(packet)
         str_data=tostring(iq.xml, top_level=True)
@@ -348,7 +346,6 @@ class master():
           
         iq=Iq()
         iq['to']=key[1]
-        #iq['from']=bot.boundjid.full
         iq['type']='set'
         iq.append(packet)
         
@@ -365,15 +362,12 @@ class master():
         
         message=Message()
         message['to']=key[1]
-        #message['from']=bot.boundjid.full
         message['type']='chat'
         message.append(packet)
         
         self.send(message)
 
     def send(self, data):
-        str_data = tostring(data.xml, top_level=True)
-        num_bytes=len(str_data)
         selected_bot=self.bots[0]
         selected_bot_karma=selected_bot.get_karma()
         for bot in self.bots[1:]:
@@ -385,7 +379,10 @@ class master():
                     selected_bot_karma=karma
             else:
                 bot.karma_lock.release()
-                
+
+        data['from']=selected_bot.boundjid.full
+        str_data = tostring(data.xml, top_level=True)
+        num_bytes=len(str_data)
         selected_bot.set_karma(num_bytes)
         selected_bot.send_queue.put(str_data)
 
