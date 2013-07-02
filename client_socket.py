@@ -8,9 +8,9 @@ import threading
 RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
 MAX_ID_DIFF=2**10
-THROTTLE_RATE=0.25
+THROTTLE_RATE=0.1
 MAX_SIZE=2**17
-TIMEOUT=0.5
+TIMEOUT=None
 
 
 class client_socket():
@@ -31,6 +31,7 @@ class client_socket():
         self.id=0
         self.id_lock=threading.Lock()
         self.buffer=b''
+        self.buffer_event=threading.Event()
         socket.settimeout(TIMEOUT)
         self.socket=socket
 
@@ -55,26 +56,27 @@ class client_socket():
         while True:
             with self.reading_lock:
                 if not self.reading:
+                    self.buffer_event.set()
                     return
-                buffer_too_big=len(self.buffer)>=MAX_SIZE
-
-            if buffer_too_big:
-                time.sleep(THROTTLE_RATE)
-                continue
                     
+                if len(self.buffer)>=MAX_SIZE:
+                    self.buffer_event.set()
+                    continue
             data=self.recv(RECV_RATE)
-
             if data==None:
-                continue                
-            
+                continue
+                
             with self.reading_lock:
                 if not self.reading:
+                    self.buffer_event.set()
                     return
-                    
+                                        
                 if data:
                     self.buffer+=data
+                    self.buffer_event.set()
                 else:
                     self.reading=False
+                    self.buffer_event.set()
                     self.stop_writing()
                     self.handle_close(True)
                     return
@@ -82,10 +84,11 @@ class client_socket():
     def check_buffer(self):
         while True:
             then=time.time()
+            self.buffer_event.wait()
             with self.reading_lock:
                 if not self.reading:
                     return
-                    
+                self.buffer_event.clear()
                 if self.buffer:
                     self.send_message(self.buffer[:MAX_SIZE])
                     self.buffer=self.buffer[MAX_SIZE:]
