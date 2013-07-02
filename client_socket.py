@@ -9,7 +9,8 @@ RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
 MAX_ID_DIFF=2**10
 THROTTLE_RATE=0.1
-MAX_SIZE=2**15
+MAX_SIZE=2**17
+TIMEOUT=0.1
 
 
 class client_socket():
@@ -30,7 +31,7 @@ class client_socket():
         self.id=0
         self.id_lock=threading.Lock()
         self.buffer=b''
-        socket.setblocking(1)
+        socket.settimeout(TIMEOUT)
         self.socket=socket
 
     def run(self):
@@ -52,18 +53,21 @@ class client_socket():
     #check client sockets for buffered data
     def read_socket(self):
         while True:
-            buffer_too_big=False
             with self.reading_lock:
                 if not self.reading:
                     return
-                if len(self.buffer)>=MAX_SIZE:
-                    buffer_too_big=True
+                buffer_too_big=len(self.buffer)>=MAX_SIZE
 
             if buffer_too_big:
                 time.sleep(THROTTLE_RATE)
                 continue
                     
             data=self.recv(RECV_RATE)
+
+            if data==None:
+                time.sleep(THROTTLE_RATE)
+                continue                
+            
             with self.reading_lock:
                 if not self.reading:
                     return
@@ -177,6 +181,8 @@ class client_socket():
         try:
             result = self.socket.send(data)
             return result
+        except socket.timeout:
+            return 0
         except socket.error as why:
             if why.args[0] in asyncore._DISCONNECTED:
                 return None
@@ -192,6 +198,8 @@ class client_socket():
                 return b''
             else:
                 return data
+        except socket.timeout:
+            return None
         except socket.error as why:
             # winsock sometimes throws ENOTCONN
             if why.args[0] in asyncore._DISCONNECTED:
