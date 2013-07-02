@@ -4,10 +4,13 @@ import logging
 import socket
 import time
 import threading
+import shelve
+import os
+import glob
 
 RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
-MAX_ID_DIFF=2**10
+MAX_ID_DIFF=2**13
 THROTTLE_RATE=1.0
 MAX_SIZE=2**15
 TIMEOUT=None
@@ -22,7 +25,8 @@ class client_socket():
         self.reading=True
         self.reading_lock=threading.Lock()
         self.writing=True
-        self.incomming_messages=[]
+        self.incomming_messages_file=os.path.join(self.master.cache_dir, str(hash(self.key)))
+        self.incomming_messages=shelve.open(self.incomming_messages_file)
         self.last_id_received=0
         self.writing_lock=threading.Lock()
         self.aliases=list(self.key[1])
@@ -116,26 +120,23 @@ class client_socket():
                            
             raw_id_diff=iq_id-self.last_id_received
             id_diff=raw_id_diff%MAX_ID
-            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF:
+            str_iq_id=str(iq_id)
+            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF or str_iq_id in self.incomming_messages:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self.stop_reading()
-                self.writing=False
+                self.close_incomming_messages()
                 self.handle_close(True)
                 return
 
             logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2])
 
-            #place None in empty buffer elements
-            while id_diff>=len(self.incomming_messages):
-                self.incomming_messages.append(None)
-
-            self.incomming_messages[id_diff]=data
+            self.incomming_messages[str_iq_id]=data
             logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
 
-            while self.incomming_messages and self.incomming_messages[0]!=None:
-                data=self.incomming_messages.pop(0)
+            while str(self.last_id_received) in self.incomming_messages:
+                data=self.incomming_messages.pop(str(self.last_id_received))
                 if data=="disconnect":
-                    self.writing=False
+                    self.close_incomming_messages()
                     self.handle_close()
                     return
                 self.last_id_received=(self.last_id_received+1)%MAX_ID
@@ -144,7 +145,7 @@ class client_socket():
                     bytes=self.send(data)
                     if bytes==None:
                         self.stop_reading()
-                        self.writing=False
+                        self.close_incomming_messages()
                         self.handle_close(True)
                         return
                     data=data[bytes:]
@@ -162,6 +163,12 @@ class client_socket():
     def stop_writing_thread(self):
         with self.writing_lock:
             self.writing=False
+            self.close_incomming_messages()
+
+    def close_incomming_messages(self):
+        self.incomming_messages.close()
+        for filename in glob.glob("%s.*" % self.incomming_messages_file): #shelve tacks on unpredictable file extensions
+            os.unlink(filename)
 
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""

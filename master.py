@@ -3,7 +3,9 @@ import logging
 import time
 import threading
 import socket
-from operator import itemgetter
+import os
+import errno
+import shutil
 
 import sleekxmpp
 import xml.etree.cElementTree as ElementTree
@@ -41,7 +43,7 @@ def iq_to_key(iq):
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords, whitelist, num_logins):
+    def __init__(self, jid_passwords, whitelist, num_logins, cache_dir):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
@@ -94,6 +96,10 @@ class master():
             time.sleep(1.0)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+
+        #where to store buffers
+        self.cache_dir=os.path.join(cache_dir, str(hash(self.aliases)))
+        os.makedirs(self.cache_dir)
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
@@ -449,6 +455,8 @@ class master():
         self.server_sockets[local_address].run_thread.start()
 
     def close_socket(self, key):
+        self.client_sockets[key].stop_writing()
+        self.client_sockets[key].stop_reading()
         threading.Thread(name="close %d"%hash(key), target=lambda: self.client_sockets[key].handle_close()).start()
         
     def delete_socket(self, key):     

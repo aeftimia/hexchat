@@ -3,6 +3,9 @@ import logging
 import sys
 import argparse
 import time
+import shutil
+import os
+
 from master import master
 from stanza_plugins import register_stanza_plugins
 
@@ -25,6 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--whitelist', dest='whitelist', nargs='*', default=None, help='whitelist of ips and ports this computer can connect to. ip1 port1 ip2 port2 ...')  
     parser.add_argument('--client', dest='client', type=str, nargs='+', default=False, help='Ports to listen on and JIDs and ports to forward to. <local ip1> <local port1> <server jid1> <remote ip1> <remote port1> ...')
     parser.add_argument('--num_logins', const='num_logins', type=int, nargs='?', default=1, help='number of times to login to each account')
+    parser.add_argument('--cache_dir', const='cache_dir', type=str, nargs='?', default="/tmp/hexchat", help='where to store buffers')
     args=parser.parse_args()
 
     if args.debug:
@@ -47,7 +51,10 @@ if __name__ == '__main__':
             whitelist.append((args.whitelist[index], int(args.whitelist[index+1])))
             index+=2       
 
-    master0=master(username_passwords, whitelist, args.num_logins)
+    if os.path.isdir(args.cache_dir):
+        shutil.rmtree(args.cache_dir)
+        
+    master0=master(username_passwords, whitelist, args.num_logins, args.cache_dir)
     if args.client:
         index=0
         while index<len(args.client):
