@@ -379,6 +379,10 @@ class master():
         selected_bot=self.bots[0]
         selected_bot_karma=selected_bot.get_karma()
         for bot in self.bots[1:]:
+            if not bot.session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
+                bot.karma_lock.release()
+                continue
+                
             karma=bot.get_karma()
             now=time.time()
             if karma[1]/(now-karma[0])<selected_bot_karma[1]/(now-selected_bot_karma[0]):
