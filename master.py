@@ -151,7 +151,7 @@ class master():
     #incomming xml handlers
 
     def error_handler(self, iq):
-        logging.warn(tostring(iq.xml))
+        logging.warn(iq['from'].full + " unavailable")
         with self.peer_resources_lock:
             try:
                 del(self.peer_resources[iq['from'].bare])

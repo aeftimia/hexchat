@@ -8,9 +8,9 @@ import threading
 RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
 MAX_ID_DIFF=2**10
-THROTTLE_RATE=0.1
+THROTTLE_RATE=0.25
 MAX_SIZE=2**17
-TIMEOUT=0.1
+TIMEOUT=0.5
 
 
 class client_socket():
@@ -65,7 +65,6 @@ class client_socket():
             data=self.recv(RECV_RATE)
 
             if data==None:
-                time.sleep(THROTTLE_RATE)
                 continue                
             
             with self.reading_lock:
@@ -121,7 +120,7 @@ class client_socket():
                 self.handle_close(True)
                 return
 
-            logging.debug("%s:%d received data from " % self.key[0] + "%s:%d" % self.key[2])
+            logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2])
 
             #place None in empty buffer elements
             while id_diff>=len(self.incomming_messages):
