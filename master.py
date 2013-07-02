@@ -380,7 +380,6 @@ class master():
         selected_bot_karma=selected_bot.get_karma()
         for bot in self.bots[1:]:
             if not bot.session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
-                bot.karma_lock.release()
                 continue
                 
             karma=bot.get_karma()
