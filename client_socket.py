@@ -13,10 +13,10 @@ if sys.version_info < (3, 0):
 else:
     import queue
 
-RECV_RATE=4096 #bytes
+RECV_RATE=8192 #bytes
 MAX_ID=2**32-1
 MAX_ID_DIFF=2**15
-THROTTLE_RATE=0.01
+THROTTLE_RATE=0.1
 MAX_SIZE=2**15
 TIMEOUT=None
 
@@ -66,9 +66,6 @@ class client_socket():
                 if not self.reading:
                     return
                     
-                if len(self.read_buffer)>=MAX_SIZE:
-                    self.read_buffer_event.set()
-                    continue
             data=self.recv(RECV_RATE)
             if data==None:
                 continue
@@ -99,6 +96,9 @@ class client_socket():
                 if self.read_buffer:
                     self.send_message(self.read_buffer[:MAX_SIZE])
                     self.read_buffer=self.read_buffer[MAX_SIZE:]
+                    
+                if self.read_buffer:
+                    self.read_buffer_event.set()
                     
             dtime=time.time()-then
             if dtime<THROTTLE_RATE:
