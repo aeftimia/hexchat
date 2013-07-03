@@ -35,6 +35,7 @@ class client_socket():
         self.id_lock=threading.Lock()
         self.read_buffer=b''
         self.read_buffer_event=threading.Event()
+        socket.setblocking(1)
         self.socket=socket
 
     def run(self):
