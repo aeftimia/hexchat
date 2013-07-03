@@ -43,7 +43,7 @@ def msg_to_key(msg):
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords, whitelist, num_logins, cache_dir):
+    def __init__(self, jid_passwords, whitelist, num_logins):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
@@ -96,10 +96,6 @@ class master():
             time.sleep(1.0)
 
         self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
-
-        #where to store buffers
-        self.cache_dir=os.path.join(cache_dir, str(hash(self.aliases)))
-        os.makedirs(self.cache_dir)
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()

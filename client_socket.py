@@ -4,8 +4,6 @@ import logging
 import socket
 import time
 import threading
-import os
-import filedict
 import sys
 
 if sys.version_info < (3, 0):
@@ -15,10 +13,9 @@ else:
 
 RECV_RATE=8192 #bytes
 MAX_ID=2**32-1
-MAX_ID_DIFF=2**12
-THROTTLE_RATE=0.1
-MAX_SIZE=2**15
-TIMEOUT=None
+MAX_DB_SIZE=2**22 #bytes
+THROTTLE_RATE=0.1 #seconds
+MAX_SIZE=2**15 #bytess
 
 class client_socket():
     def __init__(self, master, key, socket):
@@ -31,7 +28,6 @@ class client_socket():
         self.writing=True
         self.writing_lock=threading.Lock()
         self.incomming_message_queue=queue.Queue()
-        self.incomming_message_db_file=os.path.join(self.master.cache_dir, str(hash(self.key)))
         self.aliases=list(self.key[1])
         self.alias_index=0
         self.alias_lock=threading.Lock()
@@ -39,7 +35,6 @@ class client_socket():
         self.id_lock=threading.Lock()
         self.read_buffer=b''
         self.read_buffer_event=threading.Event()
-        socket.settimeout(TIMEOUT)
         self.socket=socket
 
     def run(self):
@@ -67,8 +62,6 @@ class client_socket():
                     return
                     
             data=self.recv(RECV_RATE)
-            if data==None:
-                continue
                 
             with self.reading_lock:
                 if not self.reading:
@@ -116,11 +109,7 @@ class client_socket():
         self.incomming_message_queue.put((iq_id, data))
 
     def check_incomming_message_queue(self):
-        with self.writing_lock:
-            if not self.writing:
-                return
-            incomming_message_db=filedict.FileDict(self.incomming_message_db_file)
-        
+        incomming_message_db={}
         last_id_received=0
         while True:
             (iq_id, data)=self.incomming_message_queue.get()
@@ -134,10 +123,9 @@ class client_socket():
                 if not self.writing:
                     return
                 
-                if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF or iq_id in incomming_message_db:
+                if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or iq_id in incomming_message_db or sys.getsizeof(incomming_message_db)>=MAX_DB_SIZE:
                     logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                     self.stop_reading()
-                    self.close_incomming_messages()
                     self.handle_close(True)
                     return
 
@@ -148,7 +136,6 @@ class client_socket():
                 while last_id_received in incomming_message_db:
                     data=incomming_message_db.pop(last_id_received)
                     if data=="disconnect":
-                        self.close_incomming_messages()
                         self.handle_close()
                         return
                     last_id_received=(last_id_received+1)%MAX_ID
@@ -157,7 +144,6 @@ class client_socket():
                         bytes=self.send(data)
                         if bytes==None:
                             self.stop_reading()
-                            self.close_incomming_messages()
                             self.handle_close(True)
                             return
                         data=data[bytes:]
@@ -176,15 +162,7 @@ class client_socket():
     def stop_writing_thread(self):
         with self.writing_lock:
             self.writing=False
-            self.close_incomming_messages()
             self.incomming_message_queue.put((None, None)) #kill the thread that checks the queue
-
-    def close_incomming_messages(self):
-        if os.path.isfile(self.incomming_message_db_file):
-            try:
-                os.unlink(self.incomming_message_db_file)
-            except IOError:
-                pass
 
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""
@@ -206,8 +184,6 @@ class client_socket():
         try:
             result = self.socket.send(data)
             return result
-        except socket.timeout:
-            return 0
         except socket.error as why:
             if why.args[0] in asyncore._DISCONNECTED:
                 return None
@@ -223,8 +199,6 @@ class client_socket():
                 return b''
             else:
                 return data
-        except socket.timeout:
-            return None
         except socket.error as why:
             # winsock sometimes throws ENOTCONN
             if why.args[0] in asyncore._DISCONNECTED:
