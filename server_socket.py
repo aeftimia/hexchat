@@ -26,12 +26,13 @@ class server_socket(asyncore.dispatcher):
                 logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
                 key=(local_address, self.peer, self.remote_address)
                 self.master.pending_connections[key]=connection
-                if self.peer in self.master.peer_resources:
-                    logging.debug("found resource, sending connection request via iq")
-                    self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address))
-                else:
-                    logging.debug("sending connection request via message")
-                    self.master.send_connect_message((local_address, self.peer, self.remote_address)) 
+                with self.master.peer_resources_lock:
+                    if self.peer in self.master.peer_resources:
+                        logging.debug("found resource, sending connection request via iq")
+                        self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address))
+                    else:
+                        logging.debug("sending connection request via message")
+                        self.master.send_connect_message((local_address, self.peer, self.remote_address)) 
 
                 threading.Thread(name="%d timeout"%hash(key), target=lambda: self.socket_timeout(key)).start()   
 
@@ -41,3 +42,8 @@ class server_socket(asyncore.dispatcher):
             if key in self.master.pending_connections:
                 self.master.pending_connections[key].close()
                 del(self.master.pending_connections[key])
+                with self.master.peer_resources_lock:
+                    if key[1] in self.master.peer_resources:
+                        self.master.send_disconnect(key, self.master.peer_resources[key[1]], 0)
+                    else:
+                        self.master.send_disconnect(key, key[1])

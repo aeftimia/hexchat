@@ -25,12 +25,13 @@ class hexchat_disconnect(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'disconnect'
     namespace = 'hexchat:disconnect'
     plugin_attrib = 'disconnect'
-    interfaces = set(('local_ip','local_port','remote_ip','remote_port', 'id'))
+    interfaces = set(('local_ip','local_port','remote_ip','remote_port', 'id', 'aliases'))
     sub_interfaces=interfaces
 
 def register_stanza_plugins():
-    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
-    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
-    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_connect)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_ack)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_disconnect)
+    sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect)

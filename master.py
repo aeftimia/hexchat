@@ -21,21 +21,21 @@ CONNECT_TIMEOUT=1.0
 #construct key from iq
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
-def iq_to_key(iq):
-    if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
+def msg_to_key(msg):
+    if len(msg['remote_port'])>6 or len(msg['local_port'])>6:
         #these ports are way too long
         raise(ValueError)
         
-    local_port=int(iq['remote_port'])
-    remote_port=int(iq['local_port'])
+    local_port=int(msg['remote_port'])
+    remote_port=int(msg['local_port'])
             
-    local_ip=iq['remote_ip']
-    remote_ip=iq['local_ip']
+    local_ip=msg['remote_ip']
+    remote_ip=msg['local_ip']
 
     local_address=(local_ip, local_port)
     remote_address=(remote_ip,remote_port)
 
-    aliases=frozenset(iq['aliases'].split(','))
+    aliases=frozenset(msg['aliases'].split(','))
     
     key=(local_address, aliases, remote_address)
     
@@ -189,7 +189,7 @@ class master():
             return
                     
         try:
-            key=iq_to_key(msg['connect'])
+            key=msg_to_key(msg['connect'])
         except ValueError:
             logging.warn('received bad port')
             return
@@ -202,7 +202,7 @@ class master():
             return
             
         try:
-            key=iq_to_key(iq['connect_ack'])
+            key=msg_to_key(iq['connect_ack'])
         except ValueError:
             logging.warn('received bad port')
             return
@@ -251,6 +251,24 @@ class master():
 
         self.client_sockets[key].buffer_message(iq_id, "disconnect")
 
+    def disconnect_message_handler(self, msg):
+        """Handles incoming xmpp messages for disconnections"""
+        if not msg['from'].full in msg['disconnect']['aliases']:
+            logging.warn("received message with a from address that is not in its aliases")
+            return
+                    
+        try:
+            key=msg_to_key(msg['disconnect'])
+        except ValueError:
+            logging.warn('received bad port')
+            return
+            
+        with self.client_sockets_lock:
+            if key in self.client_sockets:
+                self.close_socket(key)
+            else:
+                logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (msg['local_ip'],msg['local_port'],msg['remote_ip'],msg['remote_port']))
+
     def data_handler(self, iq):
         """Handles incoming xmpp iqs for data"""
         try:
@@ -286,7 +304,7 @@ class master():
 
     #methods for sending xml
 
-    def send_data(self, key, data, iq_id, alias):
+    def send_data(self, key, data, alias, iq_id):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
@@ -306,22 +324,27 @@ class master():
         
         self.send(iq)
 
-    def send_disconnect(self, key, iq_id, alias):
+    def send_disconnect(self, key, alias, iq_id=None):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
 
-        id_stanza=ElementTree.Element('id')
-        id_stanza.text=str(iq_id)
-        packet.append(id_stanza)
+        if iq_id==None:
+            msg=Message()
+            msg['type']='chat'
+            packet=self.add_aliases(packet)
+        else:
+            msg=Iq()
+            id_stanza=ElementTree.Element('id')
+            id_stanza.text=str(iq_id)
+            packet.append(id_stanza)
+            
+        msg['to']=alias
+        msg['type']='set'
+        msg.append(packet)
         
-        iq=Iq()
-        iq['to']=alias
-        iq['type']='set'
-        iq.append(packet)
-        
-        self.send(iq)
+        self.send(msg)
 
                 
     def send_connect_ack(self, key, response, jid):

@@ -58,11 +58,12 @@ class bot(sleekxmpp.ClientXMPP):
 
     def register_hexchat_handlers(self):
         #these handle the custom iq stanzas
-        self.register_handler(callback.Callback('Connection Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
-        self.register_handler(callback.Callback('Message Handler',stanzapath.StanzaPath('message@type=chat/connect'),self.master.connect_handler))
+        self.register_handler(callback.Callback('Connect Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
+        self.register_handler(callback.Callback('Connect Message Handler',stanzapath.StanzaPath('message@type=chat/connect'),self.master.connect_handler))
         self.register_handler(callback.Callback('Connect Ack Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
-        self.register_handler(callback.Callback('Disconnection Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
         self.register_handler(callback.Callback('Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
+        self.register_handler(callback.Callback('Disconnect Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
+        self.register_handler(callback.Callback('Disconnect Message Handler',stanzapath.StanzaPath('message@type=chat/disconnect'),self.master.disconnect_message_handler))
         
         self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error/error'), self.master.error_handler))
         self.register_handler(callback.Callback('Message Error Handler',stanzapath.StanzaPath('message@type=error/error'),self.master.error_handler))

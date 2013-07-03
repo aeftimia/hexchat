@@ -4,17 +4,21 @@ import logging
 import socket
 import time
 import threading
-import shelve
 import os
-import glob
+import filedict
+import sys
+
+if sys.version_info < (3, 0):
+    import Queue as queue
+else:
+    import queue
 
 RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
-MAX_ID_DIFF=2**13
-THROTTLE_RATE=1.0
+MAX_ID_DIFF=2**14
+THROTTLE_RATE=0.1
 MAX_SIZE=2**15
 TIMEOUT=None
-
 
 class client_socket():
     def __init__(self, master, key, socket):
@@ -25,23 +29,23 @@ class client_socket():
         self.reading=True
         self.reading_lock=threading.Lock()
         self.writing=True
-        self.incomming_messages_file=os.path.join(self.master.cache_dir, str(hash(self.key)))
-        self.incomming_messages=shelve.open(self.incomming_messages_file)
-        self.last_id_received=0
         self.writing_lock=threading.Lock()
+        self.incomming_message_queue=queue.Queue()
+        self.incomming_message_db_file=os.path.join(self.master.cache_dir, str(hash(self.key)))
         self.aliases=list(self.key[1])
         self.alias_index=0
         self.alias_lock=threading.Lock()
         self.id=0
         self.id_lock=threading.Lock()
-        self.buffer=b''
-        self.buffer_event=threading.Event()
+        self.read_buffer=b''
+        self.read_buffer_event=threading.Event()
         socket.settimeout(TIMEOUT)
         self.socket=socket
 
     def run(self):
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
-        threading.Thread(name="check buffer %d" % hash(self.key), target=lambda: self.check_buffer()).start()
+        threading.Thread(name="check read buffer %d" % hash(self.key), target=lambda: self.check_read_buffer()).start()
+        threading.Thread(name="check incomming message queue %d" % hash(self.key), target=lambda: self.check_incomming_message_queue()).start()
 
     def get_alias(self):
         with self.alias_lock:
@@ -60,11 +64,10 @@ class client_socket():
         while True:
             with self.reading_lock:
                 if not self.reading:
-                    self.buffer_event.set()
                     return
                     
-                if len(self.buffer)>=MAX_SIZE:
-                    self.buffer_event.set()
+                if len(self.read_buffer)>=MAX_SIZE:
+                    self.read_buffer_event.set()
                     continue
             data=self.recv(RECV_RATE)
             if data==None:
@@ -72,30 +75,30 @@ class client_socket():
                 
             with self.reading_lock:
                 if not self.reading:
-                    self.buffer_event.set()
                     return
                                         
                 if data:
-                    self.buffer+=data
-                    self.buffer_event.set()
+                    self.read_buffer+=data
+                    self.read_buffer_event.set()
                 else:
                     self.reading=False
-                    self.buffer_event.set()
+                    self.read_buffer_event.set()
                     self.stop_writing()
                     self.handle_close(True)
                     return
 
-    def check_buffer(self):
+    def check_read_buffer(self):
+        time.sleep(THROTTLE_RATE) #let the buffer build up
         while True:
             then=time.time()
-            self.buffer_event.wait()
+            self.read_buffer_event.wait()
             with self.reading_lock:
                 if not self.reading:
                     return
-                self.buffer_event.clear()
-                if self.buffer:
-                    self.send_message(self.buffer[:MAX_SIZE])
-                    self.buffer=self.buffer[MAX_SIZE:]
+                self.read_buffer_event.clear()
+                if self.read_buffer:
+                    self.send_message(self.read_buffer[:MAX_SIZE])
+                    self.read_buffer=self.read_buffer[MAX_SIZE:]
                     
             dtime=time.time()-then
             if dtime<THROTTLE_RATE:
@@ -104,51 +107,53 @@ class client_socket():
     def send_message(self, data):
         iq_id=self.get_id()
         str_data=base64.b64encode(data).decode("UTF-8")
-        self.master.send_data(self.key, str_data, iq_id, self.get_alias())
+        self.master.send_data(self.key, str_data, self.get_alias(), iq_id)
         
     def buffer_message(self, iq_id, data):
-        threading.Thread(name="%d buffer message %d" % (hash(self.key), iq_id), target=lambda: self.buffer_message_thread(iq_id, data)).start()
         self.master.client_sockets_lock.release()
-            
-    def buffer_message_thread(self, iq_id, data):
         if data=="disconnect": #no need for validation since a bad ID leads to the same result
             self.stop_reading()
-                
-        with self.writing_lock:     
-            if not self.writing:
+        self.incomming_message_queue.put((iq_id, data))
+
+    def check_incomming_message_queue(self):
+        incomming_message_db=filedict.FileDict(self.incomming_message_db_file)
+        last_id_received=0
+        while True:
+            (iq_id, data)=self.incomming_message_queue.get()
+            if data==None:
                 return
-                           
-            raw_id_diff=iq_id-self.last_id_received
+            raw_id_diff=iq_id-last_id_received
             id_diff=raw_id_diff%MAX_ID
-            str_iq_id=str(iq_id)
-            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF or str_iq_id in self.incomming_messages:
+            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF or iq_id in incomming_message_db:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self.stop_reading()
                 self.close_incomming_messages()
                 self.handle_close(True)
                 return
 
-            logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2])
-
-            self.incomming_messages[str_iq_id]=data
-            logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
-
-            while str(self.last_id_received) in self.incomming_messages:
-                data=self.incomming_messages.pop(str(self.last_id_received))
-                if data=="disconnect":
-                    self.close_incomming_messages()
-                    self.handle_close()
+            logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
+            logging.debug("%s:%d looking for id:"%self.key[0]+str(last_id_received))
+            
+            with self.writing_lock:
+                if not self.writing:
                     return
-                self.last_id_received=(self.last_id_received+1)%MAX_ID
-                logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
-                while data:   
-                    bytes=self.send(data)
-                    if bytes==None:
-                        self.stop_reading()
+                incomming_message_db[iq_id]=data
+                while last_id_received in incomming_message_db:
+                    data=incomming_message_db.pop(last_id_received)
+                    if data=="disconnect":
                         self.close_incomming_messages()
-                        self.handle_close(True)
+                        self.handle_close()
                         return
-                    data=data[bytes:]
+                    last_id_received=(last_id_received+1)%MAX_ID
+                    logging.debug("%s:%d now looking for id:"%self.key[0]+str(last_id_received))
+                    while data:   
+                        bytes=self.send(data)
+                        if bytes==None:
+                            self.stop_reading()
+                            self.close_incomming_messages()
+                            self.handle_close(True)
+                            return
+                        data=data[bytes:]
 
     def stop_reading(self):
         threading.Thread(name="stop reading %d"%hash(self.key), target=lambda: self.stop_reading_thread()).start()
@@ -156,19 +161,19 @@ class client_socket():
     def stop_reading_thread(self):
         with self.reading_lock:
             self.reading=False
+            self.read_buffer_event.set()
 
     def stop_writing(self):
-        threading.Thread(name="stop writing %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()
-
+        threading.Thread(name="stop reading %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()
+        
     def stop_writing_thread(self):
         with self.writing_lock:
-            self.writing=False
+            self.writing=False   
             self.close_incomming_messages()
+            self.incomming_message_queue.put((None, None)) #kill the thread that checks the queue
 
     def close_incomming_messages(self):
-        self.incomming_messages.close()
-        for filename in glob.glob("%s.*" % self.incomming_messages_file): #shelve tacks on unpredictable file extensions
-            os.unlink(filename)
+        os.unlink(self.incomming_message_db_file)
 
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""
@@ -183,7 +188,7 @@ class client_socket():
                 if self.key in self.master.client_sockets:
                     self.master.delete_socket(self.key)
                     if send_disconnect:
-                        self.master.send_disconnect(self.key, self.get_id(), self.get_alias())
+                        self.master.send_disconnect(self.key, self.get_alias(), self.get_id())
 
     #overwrites of asyncore methods
     def send(self, data):
