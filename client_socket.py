@@ -117,6 +117,8 @@ class client_socket():
 
     def check_incomming_message_queue(self):
         with self.writing_lock:
+            if not self.writing:
+                return
             incomming_message_db=filedict.FileDict(self.incomming_message_db_file)
         
         last_id_received=0
@@ -178,7 +180,11 @@ class client_socket():
             self.incomming_message_queue.put((None, None)) #kill the thread that checks the queue
 
     def close_incomming_messages(self):
-        os.unlink(self.incomming_message_db_file)
+        if os.path.isfile(self.incomming_message_db_file):
+            try:
+                os.unlink(self.incomming_message_db_file)
+            except IOError:
+                pass
 
     def handle_close(self, send_disconnect=False):
         """Called when the TCP client socket closes."""
