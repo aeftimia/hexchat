@@ -63,7 +63,8 @@ class bot(sleekxmpp.ClientXMPP):
         self.register_handler(callback.Callback('Connect Ack Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
         self.register_handler(callback.Callback('Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
         self.register_handler(callback.Callback('Disconnect Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
-        self.register_handler(callback.Callback('Disconnect Message Handler',stanzapath.StanzaPath('message@type=chat/disconnect'),self.master.disconnect_message_handler))
+        self.register_handler(callback.Callback('Disconnect Error Message Handler',stanzapath.StanzaPath('message@type=chat/disconnect_error'),self.master.disconnect_error_handler))
+        self.register_handler(callback.Callback('Disconnect Error Iq Handler',stanzapath.StanzaPath('iq@type=set/disconnect_error'),self.master.disconnect_error_handler))
         
         self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error/error'), self.master.error_handler))
         self.register_handler(callback.Callback('Message Error Handler',stanzapath.StanzaPath('message@type=error/error'),self.master.error_handler))

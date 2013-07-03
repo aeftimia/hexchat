@@ -179,6 +179,9 @@ class client_socket():
                     self.master.delete_socket(self.key)
                     if send_disconnect:
                         self.master.send_disconnect(self.key, self.get_alias(), self.get_id())
+                        with self.master.pending_disconnects_lock: #wait for an error from the chat server
+                            self.master.pending_disconnects[key]=key[1]
+                            self.master.pending_disconnect_timeout(key, key[1])
 
     #overwrites of asyncore methods
     def send(self, data):

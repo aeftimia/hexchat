@@ -44,6 +44,6 @@ class server_socket(asyncore.dispatcher):
                 del(self.master.pending_connections[key])
                 with self.master.peer_resources_lock:
                     if key[1] in self.master.peer_resources:
-                        self.master.send_disconnect(key, self.master.peer_resources[key[1]], 0)
+                        self.master.send_disconnect_error(key, self.master.peer_resources[key[1]])
                     else:
-                        self.master.send_disconnect(key, key[1])
+                        self.master.send_disconnect_error(key, key[1], message=True)

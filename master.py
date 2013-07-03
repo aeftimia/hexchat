@@ -17,6 +17,7 @@ from server_socket import server_socket
 from bot import bot
 
 CONNECT_TIMEOUT=1.0
+PENDING_DISCONNECT_TIMEOUT=10.0
 
 #construct key from iq
 #return key and tuple indicating whether the key
@@ -69,6 +70,10 @@ class master():
         #pending connections
         self.pending_connections={}
 
+        #disconnects that go out when a resource is unavailable
+        #maps key => set of recipient aliases to use for sending disconnects
+        self.pending_disconnects={}
+
         #peer's resources
         self.peer_resources={}
 
@@ -83,6 +88,7 @@ class master():
         self.pending_connections_lock=threading.Lock()
         self.peer_resources_lock=threading.Lock()
         self.connection_requests_lock=threading.Lock()
+        self.pending_disconnects_lock=threading.Lock()
                
         #initialize the other sleekxmpp clients.
         self.bots=[]
@@ -167,17 +173,26 @@ class master():
             except KeyError:
                 pass
 
-        self.client_sockets_lock.acquire()
-        for key in self.client_sockets:
-            if iq['from'].full in self.client_sockets[key].aliases:
-                if len(self.client_sockets[key].aliases)>1:
-                    with self.client_sockets[key].alias_lock:
-                        self.client_sockets[key].aliases=list(frozenset(self.client_sockets[key].aliases)-frozenset([iq['from'].full]))
-                    with self.client_sockets[key].id_lock:
-                        self.client_sockets[key].id=(self.client_sockets[key].id-1)%MAX_ID
-                else:
+        with self.pending_disconnects_lock:
+            for key in self.pending_disconnects.copy():
+                if iq['from'].full in self.pending_disconnects[key]:
+                    self.pending_disconnects[key]-=frozenset([iq['from'].full])
+                    if self.pending_disconnects[key]:
+                        self.send_disconnect_error(key, set(self.pending_disconnects[key]).pop())
+                        self.pending_disconnect_timeout(key, self.pending_disconnects[key])
+                    else:
+                        del(self.pending_disconnects[key])
+
+        with self.client_sockets_lock:
+            for key in self.client_sockets:
+                if iq['from'].full in key:
                     self.close_socket(key)
-        self.client_sockets_lock.release()
+                    alias_set=key[1]-frozenset([iq['from'].full])
+                    if alias_set:
+                        with self.pending_disconnects_lock:
+                            self.pending_disconnects[key]=alias_set
+                            self.send_disconnect_error(key, set(alias_set).pop())
+                            self.pending_disconnect_timeout(key, self.pending_disconnects[key])
 
     def connect_handler(self, msg):
         if not msg['from'].full in msg['connect']['aliases']:
@@ -227,7 +242,7 @@ class master():
     def disconnect_handler(self, iq):
         """Handles incoming xmpp iqs for disconnections"""
         try:
-            key=self.iq_to_key(iq['disconnect'],iq['from'].full)
+            key=self.iq_to_key(iq['disconnect'], iq['from'].full)
         except ValueError:
             logging.warn('received bad port')
             return
@@ -247,14 +262,14 @@ class master():
 
         self.client_sockets[key].buffer_message(iq_id, "disconnect")
 
-    def disconnect_message_handler(self, msg):
-        """Handles incoming xmpp messages for disconnections"""
-        if not msg['from'].full in msg['disconnect']['aliases']:
+    def disconnect_error_handler(self, msg):
+        """Handles incoming xmpp messages for disconnections due to errors"""
+        if not msg['from'].full in msg['disconnect_error']['aliases']:
             logging.warn("received message with a from address that is not in its aliases")
             return
                     
         try:
-            key=msg_to_key(msg['disconnect'])
+            key=msg_to_key(msg['disconnect_error'])
         except ValueError:
             logging.warn('received bad port')
             return
@@ -263,6 +278,7 @@ class master():
             if key in self.client_sockets:
                 self.close_socket(key)
             else:
+                msg=msg['disconnect_error']
                 logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (msg['local_ip'],msg['local_port'],msg['remote_ip'],msg['remote_port']))
 
     def data_handler(self, iq):
@@ -320,29 +336,42 @@ class master():
         
         self.send(iq)
 
-    def send_disconnect(self, key, alias, iq_id=None):
+    def send_disconnect(self, key, alias, iq_id):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"
         logging.debug("%s:%d" % local_address + " sending disconnect request to %s:%d" % remote_address)
 
-        if iq_id==None:
+        iq=Iq()
+        id_stanza=ElementTree.Element('id')
+        id_stanza.text=str(iq_id)
+        packet.append(id_stanza)
+            
+        iq['to']=alias
+        iq['type']='set'
+        iq.append(packet)
+        
+        self.send(iq)
+
+    def send_disconnect_error(self, key, alias, message=False):
+        (local_address, remote_address)=(key[0], key[2])
+        packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect_error"))
+        packet.attrib['xmlns']="hexchat:disconnect_error"
+        packet=self.add_aliases(packet)
+        logging.debug("%s:%d" % local_address + " sending disconnect_error request to %s:%d" % remote_address)
+
+        if message:
             msg=Message()
             msg['type']='chat'
-            packet=self.add_aliases(packet)
         else:
             msg=Iq()
-            id_stanza=ElementTree.Element('id')
-            id_stanza.text=str(iq_id)
-            packet.append(id_stanza)
+            msg['type']='set'
             
         msg['to']=alias
-        msg['type']='set'
         msg.append(packet)
-        
-        self.send(msg)
 
-                
+        self.send(msg)
+        
     def send_connect_ack(self, key, response, jid):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
@@ -481,3 +510,12 @@ class master():
     def delete_socket(self, key):     
         del(self.client_sockets[key])
         logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
+
+    #handling pending disconnects
+    def pending_disconnect_timeout(self, key, alias_set):
+        threading.Thread(name="pending disconnect timeout %d %d" % (hash(key), hash(alias_set)), target=lambda: self.pending_disconnect_timeout_thread(key, alias_set)).start()
+    def pending_disconnect_timeout_thread(self, key, alias_set):
+        time.sleep(PENDING_DISCONNECT_TIMEOUT)
+        with self.pending_disconnects_lock:
+            if key in self.pending_disconnects and self.pending_disconnects[key]==alias_set:
+                del(self.pending_disconnects[key])

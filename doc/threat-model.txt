@@ -21,6 +21,6 @@ Hexchat can also be used to access tor bridges whose IPs have been already been 
 Hexchat does not protect against:
 -attackers that measure packet entropy.
 -attackers that block XMPP traffic.
--attackers that block encrypted traffic and are capable of matching xml tags to IP:Port strings.
+-attackers that block encrypted traffic
 -attackers that measure timing of XMPP traffic.
--attackers that have access to XMPP chat servers with the ability and will to disclose any of the above information.
+-attackers that have access to XMPP chat servers with the ability and will to record chat logs and and disclose them to the adversary.

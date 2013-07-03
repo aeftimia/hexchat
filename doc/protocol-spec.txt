@@ -58,14 +58,20 @@ vi)	Data is read from the buffer and sent to the appropriate socket until an ent
 a. A socket closes
 i)	An iq with its type set to "set" is created and a stanza called "disconnect" with xmlns set to "hexchat:disconnect" is created in side of it.
 ii)	The socket's id variable is incremented by 1 mod (2^32-1) is put in the text of an "id" stanza. The "id" stanza is appended to the "packet" stanza.
-iii)	The disconnect message is sent over the chat server.
+iii)	The socket is deleted from the routing table.
+iv)	The disconnect message is sent over the chat server.
+v)	The bot waits for a few seconds for an error to be sent from the chat server (see 6)
 
 b. A disconnect request is received
-i)	A key is constructed from the header. It uses the IQ's "from" field to infer to correct key. If the key is found in the routing table, move on to (ii)
+i)	The bot constructs a key from the header. It uses the IQ's "from" field to infer to correct key. If the key is found in the routing table, move on to (ii)
 ii)	If the socket's message buffer is empty, close the socket and delete it from the routing table. Otherwise, go on to (iii)
 iii)	Add the string "disconnect" to the appropriate index in the socket's message buffer. The process of selecting this index is the same as the process seen in 4bii-4biv.
+iv)	When the "disconnect" string is found in the buffer, the socket is closed and deleted from the routing table.
 
-6. Header Stanzas
+6. Error handling
+Should a recipient be disconnected from the chat server as a message is being sent, the chat server sends an error message as though it came from the recipient. The recipient of this error message is checked against the sender's routing table. If found, the bot sends a "disconnect_error" stanza to a different alias until it runs out of aliases. "disconnect_error" messages are like disconnect messages except instead of "id" stanzas, they have "aliases" stanzas which contain a comma separated list of aliases. This list of aliases is used to authenticate the disconnect_error message.
+
+7. Header Stanzas
 The header stanzas contain the following stanzas:
 stanza		==>	text
 local_ip	==>	local ip
@@ -73,5 +79,5 @@ local_port	==>	local port
 remote_ip	==>	remote ip
 remote_port	==>	remote port
 
-7. Acknowledgments
+8. Acknowledgments
 Thanks to asn, xnyhps, and the other tor developers for encoraging this idea and all of the useful feedback.
