@@ -15,8 +15,8 @@ else:
 
 RECV_RATE=4096 #bytes
 MAX_ID=2**32-1
-MAX_ID_DIFF=2**14
-THROTTLE_RATE=0.1
+MAX_ID_DIFF=2**15
+THROTTLE_RATE=0.01
 MAX_SIZE=2**15
 TIMEOUT=None
 
@@ -43,9 +43,9 @@ class client_socket():
         self.socket=socket
 
     def run(self):
+        threading.Thread(name="check incomming message queue %d" % hash(self.key), target=lambda: self.check_incomming_message_queue()).start()
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
         threading.Thread(name="check read buffer %d" % hash(self.key), target=lambda: self.check_read_buffer()).start()
-        threading.Thread(name="check incomming message queue %d" % hash(self.key), target=lambda: self.check_incomming_message_queue()).start()
 
     def get_alias(self):
         with self.alias_lock:
@@ -116,27 +116,32 @@ class client_socket():
         self.incomming_message_queue.put((iq_id, data))
 
     def check_incomming_message_queue(self):
-        incomming_message_db=filedict.FileDict(self.incomming_message_db_file)
+        with self.writing_lock:
+            incomming_message_db=filedict.FileDict(self.incomming_message_db_file)
+        
         last_id_received=0
         while True:
             (iq_id, data)=self.incomming_message_queue.get()
             if data==None:
                 return
+            
             raw_id_diff=iq_id-last_id_received
             id_diff=raw_id_diff%MAX_ID
-            if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF or iq_id in incomming_message_db:
-                logging.warn("received redundant message or too many messages in buffer. Disconnecting")
-                self.stop_reading()
-                self.close_incomming_messages()
-                self.handle_close(True)
-                return
-
-            logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
-            logging.debug("%s:%d looking for id:"%self.key[0]+str(last_id_received))
-            
+                        
             with self.writing_lock:
                 if not self.writing:
                     return
+                
+                if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or id_diff>MAX_ID_DIFF or iq_id in incomming_message_db:
+                    logging.warn("received redundant message or too many messages in buffer. Disconnecting")
+                    self.stop_reading()
+                    self.close_incomming_messages()
+                    self.handle_close(True)
+                    return
+
+                logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
+                logging.debug("%s:%d looking for id:"%self.key[0]+str(last_id_received))
+
                 incomming_message_db[iq_id]=data
                 while last_id_received in incomming_message_db:
                     data=incomming_message_db.pop(last_id_received)
@@ -164,11 +169,11 @@ class client_socket():
             self.read_buffer_event.set()
 
     def stop_writing(self):
-        threading.Thread(name="stop reading %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()
+        threading.Thread(name="stop writing %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()
         
     def stop_writing_thread(self):
         with self.writing_lock:
-            self.writing=False   
+            self.writing=False
             self.close_incomming_messages()
             self.incomming_message_queue.put((None, None)) #kill the thread that checks the queue
 
