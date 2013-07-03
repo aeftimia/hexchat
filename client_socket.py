@@ -14,8 +14,8 @@ else:
 RECV_RATE=8192 #bytes
 MAX_ID=2**32-1
 MAX_DB_SIZE=2**22 #bytes
-THROTTLE_RATE=0.1 #seconds
-MAX_SIZE=2**15 #bytess
+THROUGHPUT=50*10**3 #bytes/second
+MAX_SIZE=2**15 #bytes
 
 class client_socket():
     def __init__(self, master, key, socket):
@@ -24,6 +24,7 @@ class client_socket():
         self.running=True
         self.running_lock=threading.Lock()
         self.reading=True
+        self.done_reading=False
         self.reading_lock=threading.Lock()
         self.writing=True
         self.writing_lock=threading.Lock()
@@ -72,31 +73,33 @@ class client_socket():
                     self.read_buffer+=data
                     self.read_buffer_event.set()
                 else:
-                    self.reading=False
+                    self.done_reading=True #this allows the buffer to empty
                     self.read_buffer_event.set()
                     self.stop_writing()
                     self.handle_close(True)
                     return
 
     def check_read_buffer(self):
-        time.sleep(THROTTLE_RATE) #let the buffer build up
         while True:
             then=time.time()
             self.read_buffer_event.wait()
             with self.reading_lock:
-                if not self.reading:
+                if (not self.reading) or (self.done_reading and not self.read_buffer):
                     return
                 self.read_buffer_event.clear()
                 if self.read_buffer:
-                    self.send_message(self.read_buffer[:MAX_SIZE])
-                    self.read_buffer=self.read_buffer[MAX_SIZE:]
+                    data=self.read_buffer[:MAX_SIZE]
+                    num_bytes=len(data)
+                    self.send_message(data)
+                    self.read_buffer=self.read_buffer[num_bytes:]
                     
                 if self.read_buffer:
                     self.read_buffer_event.set()
                     
+            throttle_rate=num_bytes/THROUGHPUT        
             dtime=time.time()-then
-            if dtime<THROTTLE_RATE:
-                time.sleep(THROTTLE_RATE-dtime)
+            if dtime<throttle_rate:
+                time.sleep(throttle_rate-dtime)
                     
     def send_message(self, data):
         iq_id=self.get_id()
@@ -130,7 +133,7 @@ class client_socket():
                     self.handle_close(True)
                     return
 
-                logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % (len(data)/2)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
+                logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % len(data)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
                 logging.debug("%s:%d looking for id:"%self.key[0]+str(last_id_received))
 
                 incomming_message_db[iq_id]=data

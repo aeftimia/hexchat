@@ -12,7 +12,7 @@ import xml.etree.cElementTree as ElementTree
 from sleekxmpp.xmlstream import tostring
 from sleekxmpp.stanza import Message, Iq
 
-from client_socket import client_socket, MAX_ID
+from client_socket import client_socket
 from server_socket import server_socket
 from bot import bot
 
