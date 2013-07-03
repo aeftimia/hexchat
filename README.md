@@ -43,11 +43,15 @@ python hexchat.py --logfile <log file> --login <clientuser1@chatserver 'password
 You can also specify a whitelist of ip:ports you will allow your bot to connect to with the --whitelist option. This is used as follows:
 python hexchat.py ... --whitelist ip1 port1 ip2 port2 ...
 
+**By default, there is no whitelist and the bot will connect to any ip:port requested by the client.**
+
 Use the --debug flag to run the program in debug mode:
 
 python hexchat.py --debug --logfile ...
 
 Use the --num_logins flag to set the number of times the program should login to each account. This may or may not improve bandwidth, but the option is there. The default is to login once to each account.
+
+Use the --cache_dir arguement to specify a directory for storing buffers. The default is /tmp/hexchat. Beware, this will be cleared as the program starts.
 
 ------------------------------------------------------------------------------------------
 
