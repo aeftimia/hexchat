@@ -31,9 +31,7 @@ class client_socket():
         self.incomming_message_queue=queue.Queue()
         self.aliases=list(self.key[1])
         self.alias_index=0
-        self.alias_lock=threading.Lock()
-        self.id=0
-        self.id_lock=threading.Lock()
+        self.id=0)
         self.read_buffer=b''
         self.read_buffer_event=threading.Event()
         socket.setblocking(1)
@@ -45,16 +43,14 @@ class client_socket():
         threading.Thread(name="check read buffer %d" % hash(self.key), target=lambda: self.check_read_buffer()).start()
 
     def get_alias(self):
-        with self.alias_lock:
-            alias=self.aliases[self.alias_index%len(self.aliases)]
-            self.alias_index=(self.alias_index+1)%len(self.aliases)
-            return alias
+        alias=self.aliases[self.alias_index%len(self.aliases)]
+        self.alias_index=(self.alias_index+1)%len(self.aliases)
+        return alias
 
     def get_id(self):
-        with self.id_lock:
-            iq_id=self.id
-            self.id=(self.id+1)%MAX_ID
-            return iq_id
+        iq_id=self.id
+        self.id=(self.id+1)%MAX_ID
+        return iq_id
 
     #check client sockets for buffered data
     def read_socket(self):
