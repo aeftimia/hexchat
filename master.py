@@ -434,10 +434,16 @@ class master():
         self.send(message)
 
     def send(self, data):
-        selected_bot=self.bots[0]
+        selected_bot=None
+        while selected_bot==None:
+            for bot in self.bots:
+                if bot.session_started_event.is_set():
+                    selected_bot=bot
+                    break
+
         selected_bot_karma=selected_bot.get_karma()
-        for bot in self.bots[1:]:
-            if not bot.session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
+        for bot in self.bots:
+            if bot is selected_bot or not bot.session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
                 continue
                 
             karma=bot.get_karma()

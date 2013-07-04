@@ -14,7 +14,7 @@ else:
 RECV_RATE=8192 #bytes
 MAX_ID=2**32-1
 MAX_DB_SIZE=2**22 #bytes
-THROUGHPUT=50*10**3 #bytes/second
+THROUGHPUT=20*10**3 #bytes/second
 MAX_SIZE=2**15 #bytes
 
 class client_socket():
