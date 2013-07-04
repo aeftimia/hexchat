@@ -101,6 +101,7 @@ class bot(sleekxmpp.ClientXMPP):
         """Extract stanzas from the send queue and send them on the stream."""
         try:
             while not self.stop.is_set():
+                then=time.time() #added code
                 while not self.stop.is_set() and \
                       not self.session_started_event.is_set():
                     self.session_started_event.wait(timeout=0.1)
@@ -140,6 +141,11 @@ class bot(sleekxmpp.ClientXMPP):
                     if count > 1:
                         logging.debug('SENT: %d chunks', count)
                     self.send_queue.task_done()
+                    #added code
+                    dtime=time.time()-then
+                    sleep_time=total/THROUGHPUT
+                    if sleep_time>dtime:
+                        time.sleep(sleep_time-dtime)
                 except (Socket.error, ssl.SSLError) as serr:
                     self.event('socket_error', serr, direct=True)
                     logging.warning("Failed to send %s", data)
@@ -148,7 +154,6 @@ class bot(sleekxmpp.ClientXMPP):
                         self._end_thread('send')
                         self.disconnect(self.auto_reconnect, send_close=False)
                         return
-                time.sleep(total/THROUGHPUT) #added code
         except Exception as ex:
             logging.exception('Unexpected error in send thread: %s', ex)
             self.exception(ex)
