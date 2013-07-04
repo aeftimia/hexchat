@@ -31,7 +31,7 @@ class client_socket():
         self.incomming_message_queue=queue.Queue()
         self.aliases=list(self.key[1])
         self.alias_index=0
-        self.id=0)
+        self.id=0
         self.read_buffer=b''
         self.read_buffer_event=threading.Event()
         socket.setblocking(1)
