@@ -83,16 +83,12 @@ class master():
         #number of times to login to each account
         self.num_logins=num_logins
 
-        #number of threads sending data over chat servers
-        self.num_send_threads=0
-
         #locks
         self.client_sockets_lock=threading.Lock()
         self.pending_connections_lock=threading.Lock()
         self.peer_resources_lock=threading.Lock()
         self.connection_requests_lock=threading.Lock()
         self.pending_disconnects_lock=threading.Lock()
-        self.num_send_threads_lock=threading.Lock()
                
         #initialize the other sleekxmpp clients.
         self.bots=[]

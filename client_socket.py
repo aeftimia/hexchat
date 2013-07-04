@@ -2,7 +2,6 @@ import asyncore
 import base64
 import logging
 import socket
-import time
 import threading
 import sys
 
@@ -11,10 +10,8 @@ if sys.version_info < (3, 0):
 else:
     import queue
 
-RECV_RATE=8192 #bytes
 MAX_ID=2**32-1
 MAX_DB_SIZE=2**22 #bytes
-THROUGHPUT=20*10**3 #bytes/second
 MAX_SIZE=2**15 #bytes
 
 class client_socket():
@@ -24,7 +21,6 @@ class client_socket():
         self.running=True
         self.running_lock=threading.Lock()
         self.reading=True
-        self.done_reading=False
         self.reading_lock=threading.Lock()
         self.writing=True
         self.writing_lock=threading.Lock()
@@ -32,15 +28,12 @@ class client_socket():
         self.aliases=list(self.key[1])
         self.alias_index=0
         self.id=0
-        self.read_buffer=b''
-        self.read_buffer_event=threading.Event()
         socket.setblocking(1)
         self.socket=socket
 
     def run(self):
         threading.Thread(name="check incomming message queue %d" % hash(self.key), target=lambda: self.check_incomming_message_queue()).start()
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
-        threading.Thread(name="check read buffer %d" % hash(self.key), target=lambda: self.check_read_buffer()).start()
 
     def get_alias(self):
         alias=self.aliases[self.alias_index%len(self.aliases)]
@@ -59,57 +52,19 @@ class client_socket():
                 if not self.reading:
                     return
                     
-            data=self.recv(RECV_RATE)
+            data=self.recv(MAX_SIZE)
                 
             with self.reading_lock:
                 if not self.reading:
                     return
                                         
                 if data:
-                    self.read_buffer+=data
-                    self.read_buffer_event.set()
+                    self.send_message(data)
                 else:
-                    self.done_reading=True #this allows the buffer to empty
-                    self.read_buffer_event.set()
                     self.stop_writing()
                     self.handle_close(True)
                     return
 
-    def check_read_buffer(self):
-        with self.master.num_send_threads_lock:
-            self.master.num_send_threads+=1
-        while True:
-            then=time.time()
-            self.read_buffer_event.wait()
-            with self.reading_lock:
-                if (not self.reading) or (self.done_reading and not self.read_buffer):
-                    with self.master.num_send_threads_lock:
-                        self.master.num_send_threads-=1
-                    return
-                self.read_buffer_event.clear()
-                if self.read_buffer:
-                    data=self.read_buffer[:MAX_SIZE]
-                    num_bytes=len(data)
-                    self.send_message(data)
-                    self.read_buffer=self.read_buffer[num_bytes:]
-                    
-                if self.read_buffer:
-                    self.read_buffer_event.set()
-
-            num_bots=0
-            for bot in self.master.bots:
-                if bot.session_started_event.is_set():
-                    num_bots+=1
-            if not num_bots:
-                num_bots=1
-            with self.master.num_send_threads_lock:
-                num_send_threads=self.master.num_send_threads
-                
-            throttle_rate=num_bytes*num_send_threads/(float(THROUGHPUT)*num_bots)
-            dtime=time.time()-then
-            if dtime<throttle_rate:
-                time.sleep(throttle_rate-dtime)
-                    
     def send_message(self, data):
         iq_id=self.get_id()
         str_data=base64.b64encode(data).decode("UTF-8")
@@ -167,7 +122,6 @@ class client_socket():
     def stop_reading_thread(self):
         with self.reading_lock:
             self.reading=False
-            self.read_buffer_event.set()
 
     def stop_writing(self):
         threading.Thread(name="stop writing %d"%hash(self.key), target=lambda: self.stop_writing_thread()).start()

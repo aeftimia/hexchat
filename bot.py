@@ -6,11 +6,16 @@ import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 from stanza_plugins import *
 
+from sleekxmpp.util import QueueEmpty
+import socket as Socket
+import ssl
+
 '''
 Karma is defined as the average number of bytes sent over a window of KARMA_RESET
 '''
 
 KARMA_RESET=10.0 #seconds
+THROUGHPUT=20*10**3 #bytes/second
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
@@ -18,6 +23,7 @@ class bot(sleekxmpp.ClientXMPP):
         self.karma=0.0
         self.time_last_sent=time.time()
         self.karma_lock=threading.Lock()
+        self.__failed_send_stanza=None
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
       
         # gmail xmpp server is actually at talk.google.com
@@ -89,4 +95,69 @@ class bot(sleekxmpp.ClientXMPP):
             logging.debug("connection reestabilshed")
         else:
             raise(Exception(self.boundjid.bare+" could not connect"))            
+
+    #modified _send_thread to not send faster than THROUGHPUT
+    def _send_thread(self):
+        """Extract stanzas from the send queue and send them on the stream."""
+        try:
+            while not self.stop.is_set():
+                while not self.stop.is_set() and \
+                      not self.session_started_event.is_set():
+                    self.session_started_event.wait(timeout=0.1)
+                if self.__failed_send_stanza is not None:
+                    data = self.__failed_send_stanza
+                    self.__failed_send_stanza = None
+                else:
+                    try:
+                        data = self.send_queue.get(True, 1)
+                    except QueueEmpty:
+                        continue
+                logging.debug("SEND: %s", data)
+                enc_data = data.encode('utf-8')
+                total = len(enc_data)
+                sent = 0
+                count = 0
+                tries = 0
+                try:
+                    with self.send_lock:
+                        while sent < total and not self.stop.is_set() and \
+                              self.session_started_event.is_set():
+                            try:
+                                sent += self.socket.send(enc_data[sent:])
+                                count += 1
+                            except ssl.SSLError as serr:
+                                if tries >= self.ssl_retry_max:
+                                    logging.debug('SSL error: max retries reached')
+                                    self.exception(serr)
+                                    logging.warning("Failed to send %s", data)
+                                    if not self.stop.is_set():
+                                        self.disconnect(self.auto_reconnect,
+                                                        send_close=False)
+                                    logging.warning('SSL write error: retrying')
+                                if not self.stop.is_set():
+                                    time.sleep(self.ssl_retry_delay)
+                                tries += 1
+                    if count > 1:
+                        logging.debug('SENT: %d chunks', count)
+                    self.send_queue.task_done()
+                except (Socket.error, ssl.SSLError) as serr:
+                    self.event('socket_error', serr, direct=True)
+                    logging.warning("Failed to send %s", data)
+                    if not self.stop.is_set():
+                        self.__failed_send_stanza = data
+                        self._end_thread('send')
+                        self.disconnect(self.auto_reconnect, send_close=False)
+                        return
+                time.sleep(total/THROUGHPUT) #added code
+        except Exception as ex:
+            logging.exception('Unexpected error in send thread: %s', ex)
+            self.exception(ex)
+            if not self.stop.is_set():
+                self._end_thread('send')
+                self.disconnect(self.auto_reconnect)
+                return
+
+        self._end_thread('send')
+
+    
 
