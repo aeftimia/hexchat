@@ -43,7 +43,7 @@ def msg_to_key(msg):
     return key
 
 def alias_decode(aliases):
-    return aliases.split(",")
+    return frozenset(aliases.split(","))
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
