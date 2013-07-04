@@ -19,7 +19,7 @@ from bot import bot
 
 CONNECT_TIMEOUT=1.0
 PENDING_DISCONNECT_TIMEOUT=2.0
-PENDING_DISCONNECT_CHECK_TIME=0.5
+CHECK_TIME=0.25
 #construct key from iq
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
@@ -100,12 +100,9 @@ class master():
             for jid_password in jid_passwords:
                 self.bots.append(bot(self, jid_password))
 
+        self.get_aliases()
+
         self.bot_index=0
-
-        while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
-            time.sleep(1.0)
-
-        self.aliases=base64.b64encode(zlib.compress(",".join(map(lambda bot: bot.boundjid.full, self.bots)).encode("UTF-8"), 9)).decode("UTF-8")
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
@@ -132,10 +129,16 @@ class master():
 
     def add_aliases(self, xml):
         aliases_stanza=ElementTree.Element("aliases")
-        aliases_stanza.text=self.aliases
+        aliases_stanza.text=self.get_aliases()
         xml.append(aliases_stanza)
 
         return xml
+
+    def get_aliases(self):
+        while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
+            time.sleep(CHECK_TIME)
+
+        return base64.b64encode(zlib.compress(",".join(map(lambda bot: bot.boundjid.full, self.bots)).encode("UTF-8"), 9)).decode("UTF-8")
 
     def iq_to_key(self, iq, jid):
         if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
@@ -530,7 +533,7 @@ class master():
             with self.pending_disconnects_lock:
                 if not key in self.pending_disconnects:
                     return
-            time.sleep(PENDING_DISCONNECT_CHECK_TIME)
+            time.sleep(CHECK_TIME)
         
         with self.pending_disconnects_lock:
             if key in self.pending_disconnects and self.pending_disconnects[key]==alias_set:
