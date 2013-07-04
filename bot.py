@@ -92,7 +92,8 @@ class bot(sleekxmpp.ClientXMPP):
         logging.warning("XMPP chat server disconnected")
         logging.debug("Trying to reconnect")
         if self.connect(self.connect_address):
-            logging.debug("connection reestabilshed")
+            self.process()
+            logging.debug("connection reestablished")
         else:
             raise(Exception(self.boundjid.bare+" could not connect"))            
 
