@@ -6,6 +6,7 @@ import socket
 import os
 import errno
 import shutil
+import zlib
 
 import sleekxmpp
 import xml.etree.cElementTree as ElementTree
@@ -36,11 +37,14 @@ def msg_to_key(msg):
     local_address=(local_ip, local_port)
     remote_address=(remote_ip,remote_port)
 
-    aliases=frozenset(msg['aliases'].split(','))
+    aliases=alias_decode(msg['aliases'])
     
     key=(local_address, aliases, remote_address)
     
     return key
+
+def alias_decode(aliases):
+    return frozenset(zlib.decompress(base64.b64decode(aliases.encode("UTF-8"))).decode("UTF-8").split(","))
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
@@ -101,7 +105,7 @@ class master():
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
             time.sleep(1.0)
 
-        self.aliases=frozenset(map(lambda bot: bot.boundjid.full, self.bots)) 
+        self.aliases=base64.b64encode(zlib.compress(",".join(map(lambda bot: bot.boundjid.full, self.bots)).encode("UTF-8"), 9)).decode("UTF-8")
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
@@ -128,7 +132,7 @@ class master():
 
     def add_aliases(self, xml):
         aliases_stanza=ElementTree.Element("aliases")
-        aliases_stanza.text=",".join(self.aliases)
+        aliases_stanza.text=self.aliases
         xml.append(aliases_stanza)
 
         return xml
@@ -195,7 +199,7 @@ class master():
                             self.pending_disconnect_timeout(key, self.pending_disconnects[key])
 
     def connect_handler(self, msg):
-        if not msg['from'].full in msg['connect']['aliases']:
+        if not msg['from'].full in alias_decode(msg['connect']['aliases']):
             logging.warn("received message with a from address that is not in its aliases")
             return
                     
@@ -208,7 +212,7 @@ class master():
         threading.Thread(name="initate connection %d" % hash(key), target=lambda: self.initiate_connection(key, msg['to'])).start() 
 
     def connect_ack_handler(self, iq):
-        if not iq['from'].full in iq['connect_ack']['aliases']:
+        if not iq['from'].full in alias_decode(iq['connect_ack']['aliases']):
             logging.warn("received message with a from address that is not in its aliases")
             return
             
