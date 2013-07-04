@@ -4,7 +4,8 @@ import socket
 import threading
 import time
 
-TIMEOUT=300.0 #seconds before closing a socket if it has not gotten a connect_ack
+TIMEOUT=60.0 #seconds before closing a socket if it has not gotten a connect_ack
+CHECK_TIME=0.5
 
 class server_socket(asyncore.dispatcher):
     def __init__(self, master, local_address, peer, remote_address):
@@ -37,7 +38,13 @@ class server_socket(asyncore.dispatcher):
                 threading.Thread(name="%d timeout"%hash(key), target=lambda: self.socket_timeout(key)).start()   
 
     def socket_timeout(self, key):
-        time.sleep(TIMEOUT)
+        then=time.time()+TIMEOUT
+        while time.time()<then:
+            with self.master.pending_connections_lock:
+                if not key in self.master.pending_connections:
+                    return
+            time.sleep(CHECK_TIME)
+            
         with self.master.pending_connections_lock:
             if key in self.master.pending_connections:
                 self.master.pending_connections[key].close()

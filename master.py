@@ -17,8 +17,8 @@ from server_socket import server_socket
 from bot import bot
 
 CONNECT_TIMEOUT=1.0
-PENDING_DISCONNECT_TIMEOUT=10.0
-
+PENDING_DISCONNECT_TIMEOUT=2.0
+PENDING_DISCONNECT_CHECK_TIME=0.5
 #construct key from iq
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
@@ -515,7 +515,13 @@ class master():
     def pending_disconnect_timeout(self, key, alias_set):
         threading.Thread(name="pending disconnect timeout %d %d" % (hash(key), hash(alias_set)), target=lambda: self.pending_disconnect_timeout_thread(key, alias_set)).start()
     def pending_disconnect_timeout_thread(self, key, alias_set):
-        time.sleep(PENDING_DISCONNECT_TIMEOUT)
+        then=time.time()+PENDING_DISCONNECT_TIMEOUT
+        while time.time()<then:
+            with self.pending_disconnects_lock:
+                if not key in self.pending_disconnects:
+                    return
+            time.sleep(PENDING_DISCONNECT_CHECK_TIME)
+        
         with self.pending_disconnects_lock:
             if key in self.pending_disconnects and self.pending_disconnects[key]==alias_set:
                 del(self.pending_disconnects[key])
