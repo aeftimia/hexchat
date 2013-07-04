@@ -76,11 +76,15 @@ class client_socket():
                     return
 
     def check_read_buffer(self):
+        with self.master.num_send_threads_lock:
+            self.master.num_send_threads+=1
         while True:
             then=time.time()
             self.read_buffer_event.wait()
             with self.reading_lock:
                 if (not self.reading) or (self.done_reading and not self.read_buffer):
+                    with self.master.num_send_threads_lock:
+                        self.master.num_send_threads-=1
                     return
                 self.read_buffer_event.clear()
                 if self.read_buffer:
@@ -91,8 +95,17 @@ class client_socket():
                     
                 if self.read_buffer:
                     self.read_buffer_event.set()
-                    
-            throttle_rate=num_bytes/THROUGHPUT        
+
+            num_bots=0
+            for bot in self.master.bots:
+                if bot.session_started_event.is_set():
+                    num_bots+=1
+            if not num_bots:
+                num_bots=1
+            with self.master.num_send_threads_lock:
+                num_send_threads=self.master.num_send_threads
+                
+            throttle_rate=num_bytes*num_send_threads/(float(THROUGHPUT)*num_bots)
             dtime=time.time()-then
             if dtime<throttle_rate:
                 time.sleep(throttle_rate-dtime)
