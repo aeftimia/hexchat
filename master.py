@@ -102,8 +102,6 @@ class master():
 
         self.get_aliases()
 
-        self.bot_index=0
-
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
             

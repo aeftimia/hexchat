@@ -79,7 +79,6 @@ class bot(sleekxmpp.ClientXMPP):
 
     def session_start(self):
         """Called when the bot connects and establishes a session with the XMPP server."""
-        
         # XMPP spec says that we should broadcast our presence when we connect.
         self.send_presence()
         #self.plugin['xep_0045'].joinMUC(self.master.room, self.boundjid.user)
