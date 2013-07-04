@@ -6,7 +6,6 @@ import socket
 import os
 import errno
 import shutil
-import zlib
 
 import sleekxmpp
 import xml.etree.cElementTree as ElementTree
@@ -44,7 +43,7 @@ def msg_to_key(msg):
     return key
 
 def alias_decode(aliases):
-    return frozenset(zlib.decompress(base64.b64decode(aliases.encode("UTF-8"))).decode("UTF-8").split(","))
+    return aliases.split(","))
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
@@ -136,7 +135,7 @@ class master():
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
             time.sleep(CHECK_TIME)
 
-        return base64.b64encode(zlib.compress(",".join(map(lambda bot: bot.boundjid.full, self.bots)).encode("UTF-8"), 9)).decode("UTF-8")
+        return ",".join(map(lambda bot: bot.boundjid.full, self.bots))
 
     def iq_to_key(self, iq, jid):
         if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
