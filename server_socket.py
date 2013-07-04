@@ -4,7 +4,7 @@ import socket
 import threading
 import time
 
-TIMEOUT=300.0 #seconds before closing a socket if it has not gotten a connect_ack
+TIMEOUT=120.0 #seconds before closing a socket if it has not gotten a connect_ack
 CHECK_TIME=0.5
 
 class server_socket(asyncore.dispatcher):
@@ -17,7 +17,7 @@ class server_socket(asyncore.dispatcher):
         self.socket.setblocking(1)
         self.set_reuse_addr()
         self.bind(local_address)
-        self.listen(1023)
+        self.listen(8192)
         self.run_thread=threading.Thread(name="accept %d" % hash(local_address), target=lambda: self.accept_thread())
 
     def accept_thread(self):
