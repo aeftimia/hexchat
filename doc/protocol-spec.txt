@@ -69,7 +69,9 @@ iii)	Add the string "disconnect" to the appropriate index in the socket's messag
 iv)	When the "disconnect" string is found in the buffer, the socket is closed and deleted from the routing table.
 
 6. Error handling
-Should a recipient be disconnected from the chat server as a message is being sent, the chat server sends an error message as though it came from the recipient. The recipient of this error message is checked against the sender's routing table. If found, the bot sends a "disconnect_error" stanza to a different alias until it runs out of aliases. "disconnect_error" messages are like disconnect messages except instead of "id" stanzas, they have "aliases" stanzas (see 8).
+Should a recipient be disconnected from the chat server as a message is being sent, the chat server sends an error message as though it came from the recipient. The recipient of this error message is checked against the sender's routing table. If found, the bot sends a "disconnect" stanza with its "id" stanza set to "None" to a different alias until it runs out of aliases. 
+
+Should a socket be open for more than a certain period of time (say 5 minutes) without getting a "connect_ack," it sends a "disconnect_error" stanza with xmlns set to "hexchat:disconnect_error." "disconnect_error" messages are like disconnect messages except instead of "id" stanzas, they have "aliases" stanzas (see 8). The aliases stanza is then used to authenticate the "disconnect_error" since the client has not yet received the server's aliases via "connect_ack."
 
 7. Header Stanzas
 The header stanzas contain the following stanzas:

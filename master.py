@@ -235,7 +235,7 @@ class master():
                 if iq['from'].full in self.pending_disconnects[key]:
                     self.pending_disconnects[key]-=frozenset([iq['from'].full])
                     if self.pending_disconnects[key]:
-                        self.send_disconnect_error(key, set(self.pending_disconnects[key]).pop())
+                        self.send_disconnect(key, set(self.pending_disconnects[key]).pop())
                         self.pending_disconnect_timeout(key, self.pending_disconnects[key])
                     else:
                         del(self.pending_disconnects[key])
@@ -248,7 +248,7 @@ class master():
                     if alias_set:
                         with self.pending_disconnects_lock:
                             self.pending_disconnects[key]=alias_set
-                            self.send_disconnect_error(key, set(alias_set).pop())
+                            self.send_disconnect(key, set(alias_set).pop())
                             self.pending_disconnect_timeout(key, self.pending_disconnects[key])
 
     def connect_handler(self, msg):
@@ -310,7 +310,12 @@ class master():
             logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (iq['local_ip'],iq['local_port'],iq['remote_ip'],iq['remote_port']))
             return
             
-        #client wants to disconnect                    
+        #client wants to disconnect
+        if iq['disconnect']['id']=="None":
+            self.close_socket(key)
+            self.client_sockets_lock.release()
+            return
+
         try:
             iq_id=int(iq['disconnect']['id'])
         except ValueError:
@@ -397,7 +402,7 @@ class master():
         
         self.send(iq)
 
-    def send_disconnect(self, key, alias, iq_id):
+    def send_disconnect(self, key, alias, iq_id="None"):
         (local_address, remote_address)=(key[0], key[2])
         packet=self.format_header(local_address, remote_address, ElementTree.Element("disconnect"))
         packet.attrib['xmlns']="hexchat:disconnect"

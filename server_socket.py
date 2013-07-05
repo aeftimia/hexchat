@@ -4,7 +4,7 @@ import socket
 import threading
 import time
 
-TIMEOUT=120.0 #seconds before closing a socket if it has not gotten a connect_ack
+TIMEOUT=300.0 #seconds before closing a socket if it has not gotten a connect_ack
 CHECK_TIME=0.5
 
 class server_socket(asyncore.dispatcher):
