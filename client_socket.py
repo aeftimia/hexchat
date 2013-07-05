@@ -97,7 +97,10 @@ class client_socket():
                     self.handle_close(True)
                     return
 
-                logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % len(data)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
+                if data=="disconnect":
+                    logging.debug("%s:%d " % self.key[0] + "received disconnect from %s:%d" % self.key[2]+ " with id:%d" % iq_id)
+                else:
+                    logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % len(data)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
                 logging.debug("%s:%d looking for id:"%self.key[0]+str(last_id_received))
 
                 incomming_message_db[iq_id]=data

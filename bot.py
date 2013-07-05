@@ -15,7 +15,7 @@ Karma is defined as the average number of bytes sent over a window of KARMA_RESE
 '''
 
 KARMA_RESET=10.0 #seconds
-THROUGHPUT=5*10**3 #bytes/second
+THROUGHPUT=4.999*10**3 #bytes/second
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
