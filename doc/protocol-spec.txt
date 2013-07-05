@@ -22,14 +22,14 @@ When a client initiates a connection to an ip:port running hexchat:
 i)	A connection request is sent to the appropriate JID on the chat server. If the full JID of the recipient is known, the the connection request is sent in an IQ stanza with its type set to "set", otherwise it is sent in a message stanza with its type set to "chat".
 ii)	A stanza called "connect" is created within the stanza created in (i). The "connect" stanza's xmlns is set to "hexchat:connect". The client creates an entry in its table of pending connections with the following key-value pair:
 ((local ip, local port), bare JID of the recipient of the connection request, (remote ip, remote port)) ==> connected socket
-iii)	A comma separated list of JIDs the bot has used to connect to the chat server is included an "aliases" stanza inside the "connect" stanza
+iii)	An "aliases" stanza inside the "connect" stanza (see 8)
 iv)	The IQ or message stanza is sent over the chat server
 
 b. The server acknowledges the request and indicates whether the connection succeeded
-When a bot recieves a connection request, it first checks that the "from" field is in the "aliases" stanza of the header for security. The bot then constructs a key from the header. If that key is not in its routing table, it tries to connect to the appropriate ip:port specified in the "remote_ip" and "remote_port" stanzas in the header. The server then sends back an IQ stanza with its type set to "result". This stanza contains a "connect_ack" stanza with its xmlns set to "hexchat:connect_ack". The "connect_ack" stanza contains a "id" stanza. If the connection succeeded, the "response" stanza contains the string "success", otherwise, it contains the string "failure". If the connection succeeded, a comma separated list of JIDs the bot has used to connect to the chat server is included an "aliases" stanza inside the "connect_ack" stanza.
+When a bot recieves a connection request, it first checks that the "from" field is in the aliases provided in the "aliases" stanza of the header for security. The bot then constructs a key from the header. If that key is not in its routing table, it tries to connect to the appropriate ip:port specified in the "remote_ip" and "remote_port" stanzas in the header. The server then sends back an IQ stanza with its type set to "result". This stanza contains a "connect_ack" stanza with its xmlns set to "hexchat:connect_ack". The "connect_ack" stanza contains a "id" stanza. If the connection succeeded, the "response" stanza contains the string "success", otherwise, it contains the string "failure". If the connection succeeded, an "aliases" stanza inside the "connect_ack" stanza (see 8).
 
 c. The client recieves a connection acknowledgement
-When a bot recieves a connection request, it first checks that the "from" field is in the "aliases" stanza of the header for security. The bot then constructs a key from the header. If it finds key that matches a key in its pending connections table and the "response" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
+When a bot recieves a connection request, it first checks that the "from" field is in the aliases provided by the "aliases" stanza of the header for security. The bot then constructs a key from the header. If it finds key that matches a key in its pending connections table and the "response" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
 ((local ip, local port), set of aliases specified in the "aliases" stanza, (remote ip, remote port)) ==> socket
 
 If the response stanza reads "failure" it closes the socket in the pending connections table and deletes the entry from the pending connections table. Otherwise, bot stores the value in the "response" stanza for later use.
@@ -40,7 +40,7 @@ i)	Data is read from a socket and added to a buffer, which is periodically check
 ii) 	All data is base 64 encoded, and put in a "data" stanza.
 iii)	A header is constructed and appended to the "packet" stanza with its xmlns set to "hexchat:packet".
 iv)	The socket's id variable is incremented by 1 mod (2^32-1) is put in the text of an "id" stanza. The "id" stanza is appended to the "packet" stanza.
-v)	The recipient of the message is selected from the list of aliases provided in the header during the connection process. Specifically, the bot rotates through each entry of this list every time an IQ is sent.
+v)	The recipient of the message is selected from the list of aliases provided during the connection process. Specifically, the bot rotates through each entry of this list every time an IQ is sent.
 vi)	The sender of the message is selected from a list of accounts connected to the chat server. Specifically, the bot rotates through each each of its connected accounts each time it sends any kind of message. 
 vii)	The message is sent over the chat server 
 
@@ -69,7 +69,7 @@ iii)	Add the string "disconnect" to the appropriate index in the socket's messag
 iv)	When the "disconnect" string is found in the buffer, the socket is closed and deleted from the routing table.
 
 6. Error handling
-Should a recipient be disconnected from the chat server as a message is being sent, the chat server sends an error message as though it came from the recipient. The recipient of this error message is checked against the sender's routing table. If found, the bot sends a "disconnect_error" stanza to a different alias until it runs out of aliases. "disconnect_error" messages are like disconnect messages except instead of "id" stanzas, they have "aliases" stanzas which contain a compressed comma separated list of aliases. This list of aliases is used to authenticate the disconnect_error message.
+Should a recipient be disconnected from the chat server as a message is being sent, the chat server sends an error message as though it came from the recipient. The recipient of this error message is checked against the sender's routing table. If found, the bot sends a "disconnect_error" stanza to a different alias until it runs out of aliases. "disconnect_error" messages are like disconnect messages except instead of "id" stanzas, they have "aliases" stanzas (see 8).
 
 7. Header Stanzas
 The header stanzas contain the following stanzas:
@@ -79,5 +79,15 @@ local_port	==>	local port
 remote_ip	==>	remote ip
 remote_port	==>	remote port
 
-8. Acknowledgments
+8. Aliases Stanza
+Root stanza is <aliases>
+Inside the root stanza is xml of the form:
+<server>
+    <user>
+    resource1,resource2,...,resourceN
+    </user>
+</server>
+, for each JID of the form user@server/resource that the bot is using to connect to a chat server.
+
+9. Acknowledgments
 Thanks to asn, xnyhps, and the other tor developers for encoraging this idea and all of the useful feedback.

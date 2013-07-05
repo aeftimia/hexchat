@@ -22,7 +22,7 @@ CHECK_TIME=0.25
 #construct key from iq
 #return key and tuple indicating whether the key
 #is in the client_sockets dict
-def msg_to_key(msg):
+def msg_to_key(msg, aliases):
     if len(msg['remote_port'])>6 or len(msg['local_port'])>6:
         #these ports are way too long
         raise(ValueError)
@@ -35,15 +35,50 @@ def msg_to_key(msg):
 
     local_address=(local_ip, local_port)
     remote_address=(remote_ip,remote_port)
-
-    aliases=alias_decode(msg['aliases'])
     
     key=(local_address, aliases, remote_address)
     
     return key
 
-def alias_decode(aliases):
-    return frozenset(aliases.split(","))
+def alias_decode(msg, root):
+    element_tree=msg.xml
+    xml_dict=elementtree_to_dict(element_tree)
+    root_dict=xml_dict[root][0]
+    alias_dict=root_dict['aliases'][0]
+
+    aliases=set()
+    for server in alias_dict:
+        for user in alias_dict[server][0]:
+            resources=alias_dict[server][0][user][0].split(",")
+            for resource in resources:
+                aliases.add("%s@%s/%s" % (user, server, resource))
+    
+    return frozenset(aliases)
+
+#modified from http://codereview.stackexchange.com/questions/10400/convert-elementtree-to-dict
+def elementtree_to_dict(element):
+    node = dict()
+
+    text = getattr(element, 'text', None)
+    if text is not None:
+        return text
+
+    nodes = {}
+    for child in element: # element's children
+        tag = get_tag(child)
+        subdict=elementtree_to_dict(child)
+        if tag in nodes:
+            nodes[tag].append(subdict)
+        else:
+            nodes[tag]=[subdict]
+
+    return nodes
+
+def get_tag(element):
+    if element.tag[0] == "{":
+        return element.tag[1:].partition("}")[2]
+    else:
+        return elem.tag
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
@@ -99,7 +134,8 @@ class master():
             for jid_password in jid_passwords:
                 self.bots.append(bot(self, jid_password))
 
-        self.get_aliases()
+        while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
+            time.sleep(CHECK_TIME)
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
@@ -126,16 +162,33 @@ class master():
 
     def add_aliases(self, xml):
         aliases_stanza=ElementTree.Element("aliases")
-        aliases_stanza.text=self.get_aliases()
+        servers={}
+        for bot in self.bots:
+            while not bot.session_started_event.is_set():
+                time.sleep(CHECK_TIME)
+            jid=bot.boundjid
+            user=jid.user
+            server=jid.server
+            resource=jid.resource
+            if server in servers:
+                if user in servers[server]:
+                    servers[server][user].add(resource)
+                else:
+                    servers[server][user]=set([resource])
+            else:
+                servers[server]={user : set([resource])}
+
+        for server in servers:
+            server_stanza=ElementTree.Element(server)
+            for user in servers[server]:
+                user_stanza=ElementTree.Element(user)
+                user_stanza.text=",".join(servers[server][user])
+                server_stanza.append(user_stanza)
+            aliases_stanza.append(server_stanza)
+            
         xml.append(aliases_stanza)
 
         return xml
-
-    def get_aliases(self):
-        while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
-            time.sleep(CHECK_TIME)
-
-        return ",".join(map(lambda bot: bot.boundjid.full, self.bots))
 
     def iq_to_key(self, iq, jid):
         if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
@@ -199,12 +252,13 @@ class master():
                             self.pending_disconnect_timeout(key, self.pending_disconnects[key])
 
     def connect_handler(self, msg):
-        if not msg['from'].full in alias_decode(msg['connect']['aliases']):
+        aliases=alias_decode(msg, 'connect')
+        if not msg['from'].full in aliases:
             logging.warn("received message with a from address that is not in its aliases")
             return
                     
         try:
-            key=msg_to_key(msg['connect'])
+            key=msg_to_key(msg['connect'], aliases)
         except ValueError:
             logging.warn('received bad port')
             return
@@ -212,12 +266,13 @@ class master():
         threading.Thread(name="initate connection %d" % hash(key), target=lambda: self.initiate_connection(key, msg['to'])).start() 
 
     def connect_ack_handler(self, iq):
-        if not iq['from'].full in alias_decode(iq['connect_ack']['aliases']):
+        aliases=alias_decode(iq, 'connect_ack')
+        if not iq['from'].full in aliases:
             logging.warn("received message with a from address that is not in its aliases")
             return
             
         try:
-            key=msg_to_key(iq['connect_ack'])
+            key=msg_to_key(iq['connect_ack'], aliases)
         except ValueError:
             logging.warn('received bad port')
             return
@@ -268,12 +323,14 @@ class master():
 
     def disconnect_error_handler(self, msg):
         """Handles incoming xmpp messages for disconnections due to errors"""
-        if not msg['from'].full in msg['disconnect_error']['aliases']:
+        
+        aliases=alias_decode(msg, 'disconnect_error')
+        if not msg['from'].full in aliases:
             logging.warn("received message with a from address that is not in its aliases")
             return
                     
         try:
-            key=msg_to_key(msg['disconnect_error'])
+            key=msg_to_key(msg['disconnect_error'], aliases)
         except ValueError:
             logging.warn('received bad port')
             return
