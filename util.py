@@ -16,10 +16,14 @@ CHECK_RATE=0.1 #seconds to check for a condition
 
 CONNECT_TIMEOUT=1.0 #time to wait to try to connect a socket to the requested ip:port
 PENDING_DISCONNECT_TIMEOUT=2.0 #time to wait for the chat server to send an error
-MAX_ALIASES=40
-MIN_ALIASES=10
 SELECT_TIMEOUT=0.0
 SELECT_LOOP_RATE=0.01 #rate to poll sockets
+
+MAX_THROUGHPUT=100*10**3 #bytes/second
+MIN_THROUGHPUT=64*10**3 #bytes/second
+
+MAX_ALIASES=MAX_THROUGHPUT/THROUGHPUT
+MIN_ALIASES=MIN_THROUGHPUT/THROUGHPUT
 
 #construct key from msg
 def msg_to_key(msg, aliases):

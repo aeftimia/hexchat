@@ -79,6 +79,14 @@ class master():
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
             time.sleep(CHECK_RATE)
 
+        self.min_aliases=MIN_ALIASES
+
+        if self.min_aliases<1:
+            self.min_aliases=1
+        
+        if self.min_aliases>len(self.bots):
+            self.min_aliases=len(self.bots)
+
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
 
@@ -146,15 +154,10 @@ class master():
 
         return selected_index #with karma_lock still acquired
 
-    def get_aliases(self):
-        if MIN_ALIASES<len(self.bots):
-            min_aliases=MIN_ALIASES
-        else:
-            min_aliases=len(self.bots)
-            
+    def get_aliases(self):            
         index_list=[]
         client_index_list=[]
-        while len(index_list)<min_aliases:
+        while len(index_list)<self.min_aliases:
             index_list=[]
             while client_index_list:
                 self.bots[client_index_list.pop()[0]].num_clients_lock.release()
