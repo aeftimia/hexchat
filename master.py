@@ -171,8 +171,8 @@ class master():
         for index in index_list:
             self.bots[index].num_clients+=1
             
-        for bot in self.bots:
-            bot.num_clients_lock.release()
+        while client_index_list:
+            self.bots[client_index_list.pop()[0]].num_clients_lock.release()
             
         return index_list
 
