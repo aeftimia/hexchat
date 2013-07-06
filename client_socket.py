@@ -36,9 +36,6 @@ class client_socket():
             self.to_alias_index=(self.to_alias_index+1)%len(self.to_aliases)
             return to_alias
 
-    def get_from_aliases(self):
-        return self.from_aliases
-
     def get_id(self):
         iq_id=self.id
         self.id=(self.id+1)%MAX_ID

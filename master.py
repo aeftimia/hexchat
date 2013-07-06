@@ -223,12 +223,13 @@ class master():
     def get_best_karma(self, indices):
         selected_index=None
         while selected_index==None:
-            for index, bot in enumerate(self.bots):
+            for index in indices:
+                bot=self.bots[index]
                 if bot.session_started_event.is_set():
                     selected_index=index
+                    selected_karma=bot.get_karma()
                     break
-
-        selected_karma=self.bots[selected_index].get_karma()
+                    
         for index in indices:
             if index is selected_index or not self.bots[index].session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
                 continue
@@ -257,7 +258,8 @@ class master():
                 self.bots[client_index_list.pop()[0]].num_clients_lock.release()
                 
             for bot_index, bot in enumerate(self.bots):
-                client_index_list.append((bot_index, bot.get_num_clients()))
+                if bot.session_started_event.is_set(): 
+                    client_index_list.append((bot_index, bot.get_num_clients()))
             
             client_index_list.sort(key=lambda element: element[1])
             for element in client_index_list:
