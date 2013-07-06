@@ -19,8 +19,8 @@ from bot import bot
 CONNECT_TIMEOUT=1.0
 PENDING_DISCONNECT_TIMEOUT=2.0
 CHECK_TIME=0.25
-MAX_ALIASES=20
-MIN_ALIASES=5
+MAX_ALIASES=100
+MIN_ALIASES=15
 
 #construct key from iq
 #return key and tuple indicating whether the key
@@ -221,8 +221,8 @@ class master():
         for index in index_list:
             self.bots[index].num_clients+=1
             
-        for bot in self.bots:
-            bot.num_clients_lock.release()
+        while client_index_list:
+            self.bots[client_index_list.pop()[0]].num_clients_lock.release()
             
         return index_list
 
