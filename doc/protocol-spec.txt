@@ -89,7 +89,7 @@ Inside the root stanza is xml of the form:
     resource1,resource2,...,resourceN
     </user>
 </server>
-, for some maximum number (currently set to 40) of JIDs of the form user@server/resource that the bot is using to connect to a chat server.
+, for some number of JIDs of the form user@server/resource that the bot is using to connect to a chat server. The exact number of JIDs given out depends on the number of JIDs used. The program always seeks to give enough aliases that it can send a total of ALLOCATED_BANDWIDTH bytes/second through them. ALLOCATED_BANDWIDTH is currently set to 64kb/s. Thus, all connection ideally given 64kb/s. This number may change as the number of connections grows very large.
 
 9. Acknowledgments
 Thanks to asn, xnyhps, and the other tor developers for encoraging this idea and all of the useful feedback.
