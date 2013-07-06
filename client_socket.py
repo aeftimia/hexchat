@@ -106,7 +106,8 @@ class client_socket():
             return result
         except socket.error as why:
             if why.args[0] in asyncore._DISCONNECTED:
-                return self.handle_close(True)
+                self.handle_close(True)
+                return 0
             else:
                 raise
 

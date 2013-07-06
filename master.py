@@ -198,7 +198,7 @@ class master():
                     write_buffer=client_socket.write_buffer
                     if write_buffer:
                         bytes=client_socket.send(write_buffer)
-                        client_socket.write_buffer=client_socket.write_buffer[bytes:]
+                        client_socket.write_buffer=write_buffer[bytes:]
                         
                 #read
                 for socket in readable:
