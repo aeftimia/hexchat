@@ -6,6 +6,7 @@ import socket
 import os
 import errno
 import shutil
+import select
 
 import sleekxmpp
 import xml.etree.cElementTree as ElementTree
@@ -21,6 +22,8 @@ PENDING_DISCONNECT_TIMEOUT=2.0
 CHECK_TIME=0.25
 MAX_ALIASES=40
 MIN_ALIASES=10
+SELECT_TIMEOUT=0.0
+SELECT_LOOP_RATE=0.01
 
 #construct key from iq
 #return key and tuple indicating whether the key
@@ -151,6 +154,9 @@ class master():
         #number of times to login to each account
         self.num_logins=num_logins
 
+        #maps sockets to keys of client_sockets
+        self.socket_map={}
+
         #locks
         self.client_sockets_lock=threading.Lock()
         self.pending_connections_lock=threading.Lock()
@@ -174,6 +180,36 @@ class master():
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
 
+        threading.Thread(name="loop %d" % hash(frozenset(map(lambda bot: bot.boundjid.full, self.bots))), target=lambda: self.select_loop()).start()
+
+    def select_loop(self):
+        while True:
+            time.sleep(SELECT_LOOP_RATE)
+            with self.client_sockets_lock:
+                #write    
+                if not self.socket_map:
+                    time.sleep(SELECT_TIMEOUT)
+                    continue
+                sockets=list(self.socket_map)
+                (readable, writable, _)=select.select(sockets, sockets, [], SELECT_TIMEOUT)
+                for socket in writable:
+                    key=self.socket_map[socket]
+                    client_socket=self.client_sockets[key]
+                    write_buffer=client_socket.write_buffer
+                    if write_buffer:
+                        bytes=client_socket.send(write_buffer)
+                        client_socket.write_buffer=client_socket.write_buffer[bytes:]
+                        
+                #read
+                for socket in readable:
+                    if not socket in self.socket_map:
+                        continue
+                    key=self.socket_map[socket]
+                    client_socket=self.client_sockets[key]
+                    if not client_socket.reading:
+                         continue
+                    client_socket.recv()
+            
     def get_best_karma(self, indices):
         selected_index=None
         while selected_index==None:
@@ -620,7 +656,7 @@ class master():
 
     def create_client_socket(self, key, from_aliases, socket):
         self.client_sockets[key] = client_socket(self, key, from_aliases, socket)
-        self.client_sockets[key].run()
+        self.socket_map[self.client_sockets[key].socket]=key
 
     def create_server_socket(self, local_address, peer, remote_address):
         """Create a listener and put it in the server_sockets dictionary."""
@@ -628,11 +664,10 @@ class master():
         self.server_sockets[local_address].run_thread.start()
 
     def close_socket(self, key):
-        self.client_sockets[key].stop_writing()
-        self.client_sockets[key].stop_reading()
-        threading.Thread(name="close %d"%hash(key), target=lambda: self.client_sockets[key].handle_close()).start()
+        self.client_sockets[key].handle_close()
         
-    def delete_socket(self, key):     
+    def delete_socket(self, key):
+        del(self.socket_map[self.client_sockets[key].socket])
         del(self.client_sockets[key])
         logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
