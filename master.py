@@ -198,9 +198,14 @@ class master():
         return selected_index #with karma_lock still acquired
 
     def get_aliases(self):
+        if MIN_ALIASES<len(self.bots):
+            min_aliases=MIN_ALIASES
+        else:
+            min_aliases=len(self.bots)
+            
         index_list=[]
         client_index_list=[]
-        while len(index_list)<MIN_ALIASES:
+        while len(index_list)<min_aliases:
             index_list=[]
             while client_index_list:
                 self.bots[client_index_list.pop()[0]].num_clients_lock.release()
@@ -212,7 +217,7 @@ class master():
             for element in client_index_list:
                 if len(index_list)<=MAX_ALIASES and self.bots[element[0]].session_started_event.is_set():
                     index_list.append(element[0])
-                    
+                          
         for index in index_list:
             self.bots[index].num_clients+=1
             
