@@ -186,13 +186,23 @@ class master():
         while True:
             time.sleep(SELECT_LOOP_RATE)
             with self.client_sockets_lock:
-                #write    
+
                 if not self.socket_map:
                     time.sleep(SELECT_TIMEOUT)
                     continue
                 sockets=list(self.socket_map)
-                (readable, writable, _)=select.select(sockets, sockets, [], SELECT_TIMEOUT)
+                (readable, writable, error)=select.select(sockets, sockets, sockets, SELECT_TIMEOUT)
+
+                #error
+                for socket in error:
+                    key=self.socket_map[socket]
+                    client_socket=self.client_sockets[key]
+                    client_socket.handle_expt_event()               
+
+                #write
                 for socket in writable:
+                    if not socket in self.socket_map:
+                        continue
                     key=self.socket_map[socket]
                     client_socket=self.client_sockets[key]
                     write_buffer=client_socket.write_buffer

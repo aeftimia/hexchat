@@ -133,3 +133,18 @@ class client_socket():
         except socket.error as why:
             if why.args[0] not in (asyncore.ENOTCONN, asyncore.EBADF):
                 raise
+                
+    def handle_expt_event(self):
+        # handle_expt_event() is called if there might be an error on the
+        # socket, or if there is OOB data
+        # check for the error condition first
+        err = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if err != 0:
+            # we can get here when select.select() says that there is an
+            # exceptional condition on the socket
+            # since there is an error, we'll go ahead and close the socket
+            # like we would in a subclassed handle_read() that received no
+            # data
+            self.handle_close(True)
+        else:
+            logging.warn('something odd happened with a socket')
