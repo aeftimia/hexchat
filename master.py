@@ -19,8 +19,8 @@ from bot import bot
 CONNECT_TIMEOUT=1.0
 PENDING_DISCONNECT_TIMEOUT=2.0
 CHECK_TIME=0.25
-MAX_ALIASES=100
-MIN_ALIASES=15
+MAX_ALIASES=40
+MIN_ALIASES=10
 
 #construct key from iq
 #return key and tuple indicating whether the key

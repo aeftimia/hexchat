@@ -22,6 +22,9 @@ class bot(sleekxmpp.ClientXMPP):
         self.master=master
         self.karma_lock=threading.Lock()
         self.num_clients_lock=threading.Lock()
+        self.karma=0.0
+        self.time_last_sent=time.time()
+        self.num_clients=0
         self.__failed_send_stanza=None
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
       
@@ -76,14 +79,7 @@ class bot(sleekxmpp.ClientXMPP):
     ### session management mathods:
 
     def boot(self, process=True):
-        if self.connect(self.connect_address):
-            with self.karma_lock:
-                self.karma=0.0
-                self.time_last_sent=time.time()
-                
-            with self.num_clients_lock:
-                self.num_clients=0
-                
+        if self.connect(self.connect_address):                
             if process:
                 self.process()
         else:
