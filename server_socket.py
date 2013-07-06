@@ -23,21 +23,22 @@ class server_socket(asyncore.dispatcher):
     def accept_thread(self):
         while True:
             connection, local_address = self.accept()
+            aliases=self.master.get_aliases()
             with self.master.pending_connections_lock:
                 logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
                 key=(local_address, self.peer, self.remote_address)
-                self.master.pending_connections[key]=connection
+                self.master.pending_connections[key]=(aliases, connection)
                 with self.master.peer_resources_lock:
                     if self.peer in self.master.peer_resources:
                         logging.debug("found resource, sending connection request via iq")
-                        self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address))
+                        self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address), aliases)
                     else:
                         logging.debug("sending connection request via message")
-                        self.master.send_connect_message((local_address, self.peer, self.remote_address)) 
+                        self.master.send_connect_message((local_address, self.peer, self.remote_address), aliases) 
 
-                threading.Thread(name="%d timeout"%hash(key), target=lambda: self.socket_timeout(key)).start()   
+                threading.Thread(name="%d timeout"%hash(key), target=lambda: self.socket_timeout(key, aliases)).start()   
 
-    def socket_timeout(self, key):
+    def socket_timeout(self, key, aliases):
         then=time.time()+TIMEOUT
         while time.time()<then:
             with self.master.pending_connections_lock:
@@ -47,10 +48,9 @@ class server_socket(asyncore.dispatcher):
             
         with self.master.pending_connections_lock:
             if key in self.master.pending_connections:
-                self.master.pending_connections[key].close()
-                del(self.master.pending_connections[key])
+                (from_aliases, socket)=self.master.pending_connections.pop(key)
                 with self.master.peer_resources_lock:
                     if key[1] in self.master.peer_resources:
-                        self.master.send_disconnect_error(key, self.master.peer_resources[key[1]])
+                        self.master.send_disconnect_error(key, from_aliases, self.master.peer_resources[key[1]])
                     else:
-                        self.master.send_disconnect_error(key, key[1], message=True)
+                        self.master.send_disconnect_error(key, from_aliases, key[1], message=True)

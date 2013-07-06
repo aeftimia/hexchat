@@ -29,7 +29,7 @@ b. The server acknowledges the request and indicates whether the connection succ
 When a bot recieves a connection request, it first checks that the "from" field is in the aliases provided in the "aliases" stanza of the header for security. The bot then constructs a key from the header. If that key is not in its routing table, it tries to connect to the appropriate ip:port specified in the "remote_ip" and "remote_port" stanzas in the header. The server then sends back an IQ stanza with its type set to "result". This stanza contains a "connect_ack" stanza with its xmlns set to "hexchat:connect_ack". The "connect_ack" stanza contains a "id" stanza. If the connection succeeded, the "response" stanza contains the string "success", otherwise, it contains the string "failure". If the connection succeeded, an "aliases" stanza inside the "connect_ack" stanza (see 8).
 
 c. The client recieves a connection acknowledgement
-When a bot recieves a connection request, it first checks that the "from" field is in the aliases provided by the "aliases" stanza of the header for security. The bot then constructs a key from the header. If it finds key that matches a key in its pending connections table and the "response" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
+When a bot recieves a connection request, it constructs a key from the header and 'from' field. If it finds key that matches a key in its pending connections table and the "response" stanza does not read "failure", it proceeds to create an entry in its routing table with the following key-value pair:
 ((local ip, local port), set of aliases specified in the "aliases" stanza, (remote ip, remote port)) ==> socket
 
 If the response stanza reads "failure" it closes the socket in the pending connections table and deletes the entry from the pending connections table. Otherwise, bot stores the value in the "response" stanza for later use.
@@ -89,7 +89,7 @@ Inside the root stanza is xml of the form:
     resource1,resource2,...,resourceN
     </user>
 </server>
-, for each JID of the form user@server/resource that the bot is using to connect to a chat server.
+, for some maximum number (currently set to 40) of JIDs of the form user@server/resource that the bot is using to connect to a chat server.
 
 9. Acknowledgments
 Thanks to asn, xnyhps, and the other tor developers for encoraging this idea and all of the useful feedback.

@@ -15,7 +15,7 @@ MAX_DB_SIZE=2**22 #bytes
 MAX_SIZE=2**15 #bytes
 
 class client_socket():
-    def __init__(self, master, key, socket):
+    def __init__(self, master, key, from_aliases, socket):
         self.master=master
         self.key=key
         self.running=True
@@ -25,8 +25,10 @@ class client_socket():
         self.writing=True
         self.writing_lock=threading.Lock()
         self.incomming_message_queue=queue.Queue()
-        self.aliases=list(self.key[1])
-        self.alias_index=0
+        self.to_aliases=list(self.key[1])
+        self.to_alias_index=0
+        self.to_alias_lock=threading.Lock()
+        self.from_aliases=from_aliases
         self.id=0
         socket.setblocking(1)
         self.socket=socket
@@ -35,10 +37,14 @@ class client_socket():
         threading.Thread(name="check incomming message queue %d" % hash(self.key), target=lambda: self.check_incomming_message_queue()).start()
         threading.Thread(name="read socket %d" % hash(self.key), target=lambda: self.read_socket()).start()
 
-    def get_alias(self):
-        alias=self.aliases[self.alias_index%len(self.aliases)]
-        self.alias_index=(self.alias_index+1)%len(self.aliases)
-        return alias
+    def get_to_alias(self):
+        with self.to_alias_lock:
+            to_alias=self.to_aliases[self.to_alias_index]
+            self.to_alias_index=(self.to_alias_index+1)%len(self.to_aliases)
+            return to_alias
+
+    def get_from_aliases(self):
+        return self.from_aliases
 
     def get_id(self):
         iq_id=self.id
@@ -68,7 +74,7 @@ class client_socket():
     def send_message(self, data):
         iq_id=self.get_id()
         str_data=base64.b64encode(data).decode("UTF-8")
-        self.master.send_data(self.key, str_data, self.get_alias(), iq_id)
+        self.master.send_data(self.key, self.from_aliases, str_data, self.get_to_alias(), iq_id)
         
     def buffer_message(self, iq_id, data):
         self.master.client_sockets_lock.release()
@@ -144,13 +150,17 @@ class client_socket():
             logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
             self.close()
             with self.master.client_sockets_lock:
-                if self.key in self.master.client_sockets:
-                    self.master.delete_socket(self.key)
-                    if send_disconnect:
-                        self.master.send_disconnect(self.key, self.get_alias(), self.get_id())
-                        with self.master.pending_disconnects_lock: #wait for an error from the chat server
-                            self.master.pending_disconnects[self.key]=self.key[1]
-                            self.master.pending_disconnect_timeout(self.key, self.key[1])
+                if not self.key in self.master.client_sockets:
+                    return
+                    
+                self.master.delete_socket(self.key)                        
+                if send_disconnect:
+                    self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
+                    with self.master.pending_disconnects_lock: #wait for an error from the chat server
+                        to_aliases=set(self.to_aliases)
+                        self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
+                        self.master.pending_disconnect_timeout(self.key, to_aliases)
+                        from_aliases=self.pending_disconnects[key][0]
 
     #overwrites of asyncore methods
     def send(self, data):

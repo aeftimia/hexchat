@@ -51,6 +51,8 @@ python hexchat.py --debug --logfile ...
 
 Use the --num_logins flag to set the number of times the program should login to each account. This may or may not improve bandwidth, but the option is there. The default is to login once to each account.
 
+Use the --sequential_bootup flag to force hexchat to login to each chat account sequentially. Some computers need this.
+
 ------------------------------------------------------------------------------------------
 
 Example:

@@ -14,15 +14,14 @@ import ssl
 Karma is defined as the average number of bytes sent over a window of KARMA_RESET
 '''
 
-KARMA_RESET=10.0 #seconds
+KARMA_RESET=60.0 #seconds
 THROUGHPUT=4.999*10**3 #bytes/second
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):
         self.master=master
-        self.karma=0.0
-        self.time_last_sent=time.time()
         self.karma_lock=threading.Lock()
+        self.num_clients_lock=threading.Lock()
         self.__failed_send_stanza=None
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
       
@@ -38,11 +37,6 @@ class bot(sleekxmpp.ClientXMPP):
         self.add_event_handler("disconnected", lambda event: self.disconnected())
 
         self.register_plugin('xep_0199') # Ping
-
-        if self.connect(self.connect_address):
-            self.process()
-        else:
-            raise(Exception(self.bots[index].boundjid.bare+" could not connect"))
 
     def set_karma(self, num_bytes):
         now=time.time()
@@ -62,6 +56,10 @@ class bot(sleekxmpp.ClientXMPP):
         self.karma_lock.acquire()
         return (self.karma, self.time_last_sent)
 
+    def get_num_clients(self):
+        self.num_clients_lock.acquire()
+        return self.num_clients
+
     def register_hexchat_handlers(self):
         #these handle the custom iq stanzas
         self.register_handler(callback.Callback('Connect Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
@@ -77,6 +75,16 @@ class bot(sleekxmpp.ClientXMPP):
                   
     ### session management mathods:
 
+    def boot(self, process=True):
+        if self.connect(self.connect_address):
+            self.karma=0.0
+            self.num_clients=0
+            self.time_last_sent=time.time()
+            if process:
+                self.process()
+        else:
+            raise(Exception(self.boundjid.bare+" could not connect"))
+
     def session_start(self):
         """Called when the bot connects and establishes a session with the XMPP server."""
         # XMPP spec says that we should broadcast our presence when we connect.
@@ -87,14 +95,10 @@ class bot(sleekxmpp.ClientXMPP):
         """Called when the bot disconnects from the XMPP server.
         Try to reconnect.
         """
-
         logging.warning("XMPP chat server disconnected")
         logging.debug("Trying to reconnect")
-        if self.connect(self.connect_address):
-            self.process()
-            logging.debug("connection reestablished")
-        else:
-            raise(Exception(self.boundjid.bare+" could not connect"))            
+        self.boot(False)
+        self.send_presence() 
 
     #modified _send_thread to not send faster than THROUGHPUT
     def _send_thread(self):
@@ -163,6 +167,3 @@ class bot(sleekxmpp.ClientXMPP):
                 return
 
         self._end_thread('send')
-
-    
-
