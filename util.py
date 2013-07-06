@@ -19,11 +19,7 @@ PENDING_DISCONNECT_TIMEOUT=2.0 #time to wait for the chat server to send an erro
 SELECT_TIMEOUT=0.0
 SELECT_LOOP_RATE=0.01 #rate to poll sockets
 
-MAX_THROUGHPUT=100*10**3 #bytes/second
-MIN_THROUGHPUT=64*10**3 #bytes/second
-
-MAX_ALIASES=MAX_THROUGHPUT/THROUGHPUT
-MIN_ALIASES=MIN_THROUGHPUT/THROUGHPUT
+ALLOCATED_BANDWIDTH=64*10**3 #bytes/second to allocate to each connection
 
 #construct key from msg
 def msg_to_key(msg, aliases):
@@ -106,8 +102,7 @@ def format_header(local_address, remote_address, xml):
         
     return xml
 
-def karma_better(karma_vars1, karma_vars2):
-    now=time.time()    
+def karma_better(karma_vars1, karma_vars2, now):
     return karma_vars1[1]/(now-karma_vars1[0])<karma_vars2[1]/(now-karma_vars2[0])
 
 

@@ -3,10 +3,12 @@ import base64
 import logging
 import socket
 import threading
+import time
 import sys
 
 from util import format_header, ElementTree, Iq
 from util import MAX_ID, MAX_DB_SIZE, MAX_SIZE
+from util import KARMA_RESET, ALLOCATED_BANDWIDTH
 
 class client_socket():
     def __init__(self, master, key, from_aliases, socket):
@@ -23,6 +25,9 @@ class client_socket():
         self.reading=True
         socket.setblocking(0)
         self.socket=socket
+        self.karma=0.0
+        self.karma_lock=threading.Lock()
+        self.time_last_sent=time.time()
 
     def get_to_alias(self):
         with self.to_alias_lock:
@@ -53,7 +58,7 @@ class client_socket():
         iq['type']='set'
         iq.append(packet)
         
-        self.master.send(iq, self.from_aliases)
+        return self.master.send(iq, self.from_aliases)
         
     def buffer_message(self, iq_id, data):
         if data=="disconnect":
@@ -105,6 +110,25 @@ class client_socket():
                 self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
                 self.master.pending_disconnect_timeout(self.key, to_aliases)
 
+    #karma methods
+    def set_karma(self, num_bytes):
+        now=time.time()
+        dtime=now-self.time_last_sent
+        if dtime>KARMA_RESET:
+            self.karma=num_bytes
+        else: #compute moving average
+              #note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
+              #and as dtime-->0, the new self.karma-->num_bytes+self.karma
+            self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)
+
+        self.time_last_sent=now        
+        self.karma_lock.release()
+
+
+    def get_karma(self):
+        self.karma_lock.acquire()
+        return (self.karma, self.time_last_sent)
+
     #socket methods
     def send(self, data):
         try:
@@ -118,18 +142,26 @@ class client_socket():
                 raise
 
     def recv(self):
-        try:
+        (karma, time_last_sent)=self.get_karma()
+        dtime=time.time()-time_last_sent
+        if (MAX_SIZE+karma)/(dtime+KARMA_RESET)>ALLOCATED_BANDWIDTH:
+            self.karma_lock.release()
+            return
+        try:                
             data = self.socket.recv(MAX_SIZE)
             if not data:
                 # a closed connection is indicated by signaling
                 # a read condition, and having recv() return 0.
                 self.handle_close(True)
+                self.karma_lock.release()
             else:
-                self.send_message(data)
+                num_bytes_sent=self.send_message(data)
+                self.set_karma(num_bytes_sent)
         except socket.error as why:
             # winsock sometimes throws ENOTCONN
             if why.args[0] in asyncore._DISCONNECTED:
                 self.handle_close(True)
+                self.karma_lock.release()
             else:
                 raise
 

@@ -7,11 +7,11 @@ import select
 
 from client_socket import client_socket
 from server_socket import server_socket
-from bot import bot, THROUGHPUT
+from bot import bot
 from util import Peer_Resource_DB
 from util import msg_to_key, alias_decode, karma_better, send_thread, Iq, tostring, ElementTree, format_header
 from util import CONNECT_TIMEOUT, PENDING_DISCONNECT_TIMEOUT, CHECK_RATE
-from util import MAX_ALIASES, MIN_ALIASES
+from util import ALLOCATED_BANDWIDTH, THROUGHPUT
 from util import SELECT_TIMEOUT, SELECT_LOOP_RATE
 
 
@@ -70,22 +70,15 @@ class master():
         self.bots=[]
         for login_num in range(self.num_logins):
             for jid_password in jid_passwords:
-                self.bots.append(bot(self, jid_password))
+                bot0=bot(self, jid_password)
                 if sequential_bootup:
-                    self.bots[-1].boot()
+                    bot0.boot()
                 else:
-                    threading.Thread(name="booting %d %d" % (hash(jid_password), login_num), target=lambda: self.bots[-1].boot()).start()
+                    threading.Thread(name="booting %d %d" % (hash(jid_password), login_num), target=lambda: bot0.boot()).start()
+                self.bots.append(bot0)
                     
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
             time.sleep(CHECK_RATE)
-
-        self.min_aliases=MIN_ALIASES
-
-        if self.min_aliases<1:
-            self.min_aliases=1
-        
-        if self.min_aliases>len(self.bots):
-            self.min_aliases=len(self.bots)
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
@@ -140,12 +133,13 @@ class master():
                     selected_karma=bot.get_karma()
                     break
                     
+        now=time.time()            
         for index in indices:
             if index is selected_index or not self.bots[index].session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
                 continue
                 
             karma=self.bots[index].get_karma()
-            if karma_better(karma, selected_karma):
+            if karma_better(karma, selected_karma, now):
                 self.bots[selected_index].karma_lock.release()
                 selected_index=index
                 selected_karma=karma
@@ -156,20 +150,22 @@ class master():
 
     def get_aliases(self):            
         index_list=[]
+        accumulated_bandwidth=0
         client_index_list=[]
-        while len(index_list)<self.min_aliases:
-            index_list=[]
-            while client_index_list:
-                self.bots[client_index_list.pop()[0]].num_clients_lock.release()
-                
+        
+        while not client_index_list:
             for bot_index, bot in enumerate(self.bots):
                 if bot.session_started_event.is_set(): 
                     client_index_list.append((bot_index, bot.get_num_clients()))
             
-            client_index_list.sort(key=lambda element: element[1])
-            for element in client_index_list:
-                if len(index_list)<=MAX_ALIASES and self.bots[element[0]].session_started_event.is_set():
-                    index_list.append(element[0])
+        client_index_list.sort(key=lambda element: element[1])
+        for element in client_index_list:
+            (bot_index, num_clients)=element
+            if self.bots[bot_index].session_started_event.is_set():
+                index_list.append(bot_index)
+                accumulated_bandwidth+=THROUGHPUT/(num_clients+1)
+                if accumulated_bandwidth>=ALLOCATED_BANDWIDTH:
+                    break
                           
         for index in index_list:
             self.bots[index].num_clients+=1
@@ -455,6 +451,8 @@ class master():
             threading.Thread(name="send from %s to %s" % (data['from'], data['to']), target=lambda: send_thread(str_data, selected_bot)).start()
         else:   
             selected_bot.send_queue.put(str_data)
+
+        return len(str_data)
 
     ### Methods for connection/socket creation.
 
