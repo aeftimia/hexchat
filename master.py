@@ -3,116 +3,18 @@ import logging
 import time
 import threading
 import socket
-import os
-import errno
-import shutil
 import select
-
-import sleekxmpp
-import xml.etree.cElementTree as ElementTree
-from sleekxmpp.xmlstream import tostring
-from sleekxmpp.stanza import Message, Iq
 
 from client_socket import client_socket
 from server_socket import server_socket
-from bot import bot
+from bot import bot, THROUGHPUT
+from util import Peer_Resource_DB
+from util import msg_to_key, alias_decode, karma_better, send_thread, Iq, tostring, ElementTree, format_header
+from util import CONNECT_TIMEOUT, PENDING_DISCONNECT_TIMEOUT, CHECK_RATE
+from util import MAX_ALIASES, MIN_ALIASES
+from util import SELECT_TIMEOUT, SELECT_LOOP_RATE
 
-CONNECT_TIMEOUT=1.0
-PENDING_DISCONNECT_TIMEOUT=2.0
-CHECK_TIME=0.25
-MAX_ALIASES=40
-MIN_ALIASES=10
-SELECT_TIMEOUT=0.0
-SELECT_LOOP_RATE=0.01
 
-#construct key from iq
-#return key and tuple indicating whether the key
-#is in the client_sockets dict
-def msg_to_key(msg, aliases):
-    if len(msg['remote_port'])>6 or len(msg['local_port'])>6:
-        #these ports are way too long
-        raise(ValueError)
-        
-    local_port=int(msg['remote_port'])
-    remote_port=int(msg['local_port'])
-            
-    local_ip=msg['remote_ip']
-    remote_ip=msg['local_ip']
-
-    local_address=(local_ip, local_port)
-    remote_address=(remote_ip,remote_port)
-    
-    key=(local_address, aliases, remote_address)
-    
-    return key
-
-def alias_decode(msg, root):
-    element_tree=msg.xml
-    xml_dict=elementtree_to_dict(element_tree)
-    root_dict=xml_dict[root][0]
-    if not 'aliases' in root_dict:
-        return set()
-    alias_dict=root_dict['aliases'][0]
-
-    aliases=set()
-    for server in alias_dict:
-        for user in alias_dict[server][0]:
-            resources=alias_dict[server][0][user][0].split(",")
-            for resource in resources:
-                aliases.add("%s@%s/%s" % (user, server, resource))
-    
-    return frozenset(aliases)
-
-#modified from http://codereview.stackexchange.com/questions/10400/convert-elementtree-to-dict
-def elementtree_to_dict(element):
-    node = dict()
-
-    text = getattr(element, 'text', None)
-    if text is not None:
-        return text
-
-    nodes = {}
-    for child in element: # element's children
-        tag = get_tag(child)
-        subdict=elementtree_to_dict(child)
-        if tag in nodes:
-            nodes[tag].append(subdict)
-        else:
-            nodes[tag]=[subdict]
-
-    return nodes
-
-def get_tag(element):
-    if element.tag[0] == "{":
-        return element.tag[1:].partition("}")[2]
-    else:
-        return elem.tag
-
-#turn local address and remote address into xml stanzas in the given element tree
-def format_header(local_address, remote_address, xml):       
-    local_ip_stanza=ElementTree.Element("local_ip")
-    local_ip_stanza.text=local_address[0]
-    xml.append(local_ip_stanza)      
-              
-    local_port_stanza=ElementTree.Element("local_port")
-    local_port_stanza.text=str(local_address[1])
-    xml.append(local_port_stanza)
-        
-    remote_ip_stanza=ElementTree.Element("remote_ip")
-    remote_ip_stanza.text=remote_address[0]
-    xml.append(remote_ip_stanza)
-
-    remote_port_stanza=ElementTree.Element("remote_port")
-    remote_port_stanza.text=str(remote_address[1])
-    xml.append(remote_port_stanza)
-        
-    return xml
-
-def karma_better(karma1, karma2):
-    now=time.time()
-    return karma1[1]/(now-karma1[0])<karma2[1]/(now-karma2[0])
-
-        
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
     def __init__(self, jid_passwords, whitelist, num_logins, sequential_bootup):
@@ -146,7 +48,7 @@ class master():
         self.pending_disconnects={}
 
         #peer's resources
-        self.peer_resources={}
+        self.peer_resources=Peer_Resource_DB()
 
         #for multiple logins
         self.connection_requests={}
@@ -175,7 +77,7 @@ class master():
                     threading.Thread(name="booting %d %d" % (hash(jid_password), login_num), target=lambda: self.bots[-1].boot()).start()
                     
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
-            time.sleep(CHECK_TIME)
+            time.sleep(CHECK_RATE)
 
         for index in range(len(self.bots)):
             self.bots[index].register_hexchat_handlers()
@@ -280,7 +182,7 @@ class master():
         servers={}
         for bot in bots:
             while not bot.session_started_event.is_set():
-                time.sleep(CHECK_TIME)
+                time.sleep(CHECK_RATE)
             jid=bot.boundjid
             user=jid.user
             server=jid.server
@@ -336,15 +238,14 @@ class master():
     def error_handler(self, iq):
         logging.warn(iq['from'].full + " unavailable")
         with self.peer_resources_lock:
-            try:
-                del(self.peer_resources[iq['from'].bare])
-            except KeyError:
-                pass
+            if iq['from'].bare in self.peer_resources:
+                if iq['from'].full in self.peer_resources[iq['from'].bare]:
+                    self.peer_resources[iq['from'].bare].remove(iq['from'].bare, iq['from'].full)
 
         with self.pending_connections_lock:
             for key0 in self.pending_connections:
                 if iq['from'].bare==key0[1]:
-                    sock=self.pending_connections[key0][0]
+                    sock=self.pending_connections[key0][1]
                     sock.close()
                     del(self.pending_connections[key0])
 
@@ -406,7 +307,7 @@ class master():
                 return
                 
             with self.peer_resources_lock:
-                self.peer_resources[key0[1]]=iq['from'].full
+                self.peer_resources.add(key0[1], iq['from'].full)
             
             (from_aliases, socket)=self.pending_connections.pop(key0)
             key=(key0[0], aliases, key0[2])
@@ -497,26 +398,31 @@ class master():
         self.client_sockets[key].buffer_message(iq_id, data)
 
     #methods for sending xml
-
-    def send_data(self, key, from_aliases, data, to_alias, iq_id):
+        
+    def send_connect_ack(self, key, response, jid):
         (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element('packet'))
-        packet.attrib['xmlns']="hexchat:packet"
+        packet=format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
+        packet.attrib['xmlns']="hexchat:connect_ack"
+        response_stanza=ElementTree.Element("response")
+        response_stanza.text=response
+        packet.append(response_stanza)
 
-        id_stanza=ElementTree.Element('id')
-        id_stanza.text=str(iq_id)
-        packet.append(id_stanza)
+        if response=="success":
+            aliases=self.get_aliases()
+            packet=self.add_aliases(packet, aliases)
+            
+        logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
         
-        data_stanza=ElementTree.Element('data')
-        data_stanza.text=data
-        packet.append(data_stanza)
-
+        indices=[index for index, bot in enumerate(self.bots) if bot.boundjid.bare==jid.bare]
         iq=Iq()
-        iq['to']=to_alias
-        iq['type']='set'
+        iq['to']=set(key[1]).pop()
+        iq['type']='result'
         iq.append(packet)
+
+        self.send(iq, indices, now=True)
         
-        self.send(iq, from_aliases)
+        if response=="success":
+            return aliases
 
     def send_disconnect(self, key, from_aliases, to_alias, iq_id="None"):
         (local_address, remote_address)=(key[0], key[2])
@@ -533,96 +439,19 @@ class master():
         iq['type']='set'
         iq.append(packet)
         
-        self.send(iq, from_aliases)
+        self.send(iq, from_aliases, now=True)
 
-    def send_disconnect_error(self, key, from_aliases, to_alias, message=False):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("disconnect_error"))
-        packet.attrib['xmlns']="hexchat:disconnect_error"
-        packet=self.add_aliases(packet, from_aliases)
-        logging.debug("%s:%d" % local_address + " sending disconnect_error request to %s:%d" % remote_address)
-
-        if message:
-            msg=Message()
-            msg['type']='chat'
-        else:
-            msg=Iq()
-            msg['type']='set'
-            
-        msg['to']=to_alias
-        msg.append(packet)
-
-        self.send(msg, from_aliases)
-        
-    def send_connect_ack(self, key, response, jid):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
-        packet.attrib['xmlns']="hexchat:connect_ack"
-        response_stanza=ElementTree.Element("response")
-        response_stanza.text=response
-        packet.append(response_stanza)
-
-        if response=="success":
-            aliases=self.get_aliases()
-            packet=self.add_aliases(packet, aliases)
-            
-        logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
-        
-        bot=[bot for bot in self.bots if bot.boundjid.bare==jid.bare][0]
-        iq=Iq()
-        iq['to']=set(key[1]).pop()
-        iq['from']=bot.boundjid.full
-        iq['type']='result'
-        iq.append(packet)
-        str_data=tostring(iq.xml, top_level=True)
-        bot.karma_lock.acquire()
-        bot.set_karma(len(str_data))
-        bot.send_queue.put(str_data)
-        
-        if response=="success":
-            return aliases
-            
-        
-    def send_connect_iq(self, key, aliases):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
-        packet.attrib['xmlns']="hexchat:connect"
-
-        packet=self.add_aliases(packet, aliases)
-        
-        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-          
-        iq=Iq()
-        iq['to']=key[1]
-        iq['type']='set'
-        iq.append(packet)
-        
-        self.send(iq, aliases)   
-        
-    def send_connect_message(self, key, aliases):
-        (local_address, remote_address)=(key[0], key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
-        packet.attrib['xmlns']="hexchat:connect"
-        
-        packet=self.add_aliases(packet, aliases)
-               
-        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
-        
-        message=Message()
-        message['to']=key[1]
-        message['type']='chat'
-        message.append(packet)
-        
-        self.send(message, aliases)
-
-    def send(self, data, aliases):
+    def send(self, data, aliases, now=False):
         selected_index=self.get_best_karma(aliases)
         selected_bot=self.bots[selected_index]
         data['from']=selected_bot.boundjid.full
         str_data = tostring(data.xml, top_level=True)
         num_bytes=len(str_data)
         selected_bot.set_karma(num_bytes)
-        selected_bot.send_queue.put(str_data)
+        if now:
+            threading.Thread(name="send from %s to %s" % (data['from'], data['to']), target=lambda: send_thread(str_data, selected_bot)).start()
+        else:   
+            selected_bot.send_queue.put(str_data)
 
     ### Methods for connection/socket creation.
 
@@ -692,7 +521,7 @@ class master():
             with self.pending_disconnects_lock:
                 if not (key in self.pending_disconnects and self.pending_disconnects[key][1]==to_aliases):
                     return
-            time.sleep(CHECK_TIME)
+            time.sleep(CHECK_RATE)
         
         with self.pending_disconnects_lock:
             if key in self.pending_disconnects and self.pending_disconnects[key][1]==to_aliases:

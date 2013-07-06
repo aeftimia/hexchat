@@ -4,8 +4,8 @@ import socket
 import threading
 import time
 
-TIMEOUT=600.0 #seconds before closing a socket if it has not gotten a connect_ack
-CHECK_TIME=0.5
+from util import format_header, ElementTree, Iq, Message
+from util import TIMEOUT, CHECK_RATE
 
 class server_socket(asyncore.dispatcher):
     def __init__(self, master, local_address, peer, remote_address):
@@ -31,10 +31,10 @@ class server_socket(asyncore.dispatcher):
                 with self.master.peer_resources_lock:
                     if self.peer in self.master.peer_resources:
                         logging.debug("found resource, sending connection request via iq")
-                        self.master.send_connect_iq((local_address, self.master.peer_resources[self.peer], self.remote_address), aliases)
+                        self.send_connect((local_address, self.master.peer_resources[self.peer], self.remote_address), aliases)
                     else:
                         logging.debug("sending connection request via message")
-                        self.master.send_connect_message((local_address, self.peer, self.remote_address), aliases) 
+                        self.send_connect((local_address, self.peer, self.remote_address), aliases, message=True) 
 
                 threading.Thread(name="%d timeout"%hash(key), target=lambda: self.socket_timeout(key, aliases)).start()   
 
@@ -44,7 +44,7 @@ class server_socket(asyncore.dispatcher):
             with self.master.pending_connections_lock:
                 if not key in self.master.pending_connections:
                     return
-            time.sleep(CHECK_TIME)
+            time.sleep(CHECK_RATE)
             
         with self.master.pending_connections_lock:
             if not key in self.master.pending_connections:
@@ -59,7 +59,49 @@ class server_socket(asyncore.dispatcher):
                 
         with self.master.peer_resources_lock:
             if key[1] in self.master.peer_resources:
-                self.master.send_disconnect_error(key, from_aliases, self.master.peer_resources[key[1]])
+                self.send_disconnect_error(key, from_aliases, self.master.peer_resources[key[1]])
             else:
-                self.master.send_disconnect_error(key, from_aliases, key[1], message=True)
+                self.send_disconnect_error(key, from_aliases, key[1], message=True)
+
+    #methods for sending xml
+        
+    def send_connect(self, key, aliases, message=False):
+        (local_address, remote_address)=(key[0], key[2])
+        packet=format_header(local_address, remote_address, ElementTree.Element("connect"))
+        packet.attrib['xmlns']="hexchat:connect"
+
+        packet=self.master.add_aliases(packet, aliases)
+        
+        logging.debug("%s:%d" % local_address + " sending connect request to %s:%d" % remote_address)
+
+        if message:
+            msg=Message()
+            msg['type']='chat'
+        else:  
+            msg=Iq()
+            msg['type']='set'
+            
+        msg['to']=key[1]
+        msg.append(packet)
+        
+        self.master.send(msg, aliases, now=True)
+
+    def send_disconnect_error(self, key, from_aliases, to_alias, message=False):
+        (local_address, remote_address)=(key[0], key[2])
+        packet=format_header(local_address, remote_address, ElementTree.Element("disconnect_error"))
+        packet.attrib['xmlns']="hexchat:disconnect_error"
+        packet=self.master.add_aliases(packet, from_aliases)
+        logging.debug("%s:%d" % local_address + " sending disconnect_error request to %s:%d" % remote_address)
+
+        if message:
+            msg=Message()
+            msg['type']='chat'
+        else:
+            msg=Iq()
+            msg['type']='set'
+            
+        msg['to']=to_alias
+        msg.append(packet)
+
+        self.master.send(msg, from_aliases, now=True)
                     

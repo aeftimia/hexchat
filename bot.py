@@ -14,8 +14,7 @@ import ssl
 Karma is defined as the average number of bytes sent over a window of KARMA_RESET
 '''
 
-KARMA_RESET=60.0 #seconds
-THROUGHPUT=4.9*10**3 #bytes/second
+from util import KARMA_RESET, THROUGHPUT
 
 class bot(sleekxmpp.ClientXMPP):
     def __init__(self, master, jid_password):

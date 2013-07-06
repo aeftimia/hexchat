@@ -5,14 +5,8 @@ import socket
 import threading
 import sys
 
-if sys.version_info < (3, 0):
-    import Queue as queue
-else:
-    import queue
-
-MAX_ID=2**32-1
-MAX_DB_SIZE=2**22 #bytes
-MAX_SIZE=2**15 #bytes
+from util import format_header, ElementTree, Iq
+from util import MAX_ID, MAX_DB_SIZE, MAX_SIZE
 
 class client_socket():
     def __init__(self, master, key, from_aliases, socket):
@@ -42,9 +36,24 @@ class client_socket():
         return iq_id
 
     def send_message(self, data):
-        iq_id=self.get_id()
-        str_data=base64.b64encode(data).decode("UTF-8")
-        self.master.send_data(self.key, self.from_aliases, str_data, self.get_to_alias(), iq_id)
+        (local_address, remote_address)=(self.key[0], self.key[2])
+        packet=format_header(local_address, remote_address, ElementTree.Element('packet'))
+        packet.attrib['xmlns']="hexchat:packet"
+
+        id_stanza=ElementTree.Element('id')
+        id_stanza.text=str(self.get_id())
+        packet.append(id_stanza)
+        
+        data_stanza=ElementTree.Element('data')
+        data_stanza.text=base64.b64encode(data).decode("UTF-8")
+        packet.append(data_stanza)
+
+        iq=Iq()
+        iq['to']=self.get_to_alias()
+        iq['type']='set'
+        iq.append(packet)
+        
+        self.master.send(iq, self.from_aliases)
         
     def buffer_message(self, iq_id, data):
         if data=="disconnect":
