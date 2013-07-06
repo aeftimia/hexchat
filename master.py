@@ -20,7 +20,7 @@ CONNECT_TIMEOUT=1.0
 PENDING_DISCONNECT_TIMEOUT=2.0
 CHECK_TIME=0.25
 MAX_ALIASES=20
-MIN_ALIASES=10
+MIN_ALIASES=5
 
 #construct key from iq
 #return key and tuple indicating whether the key
@@ -199,18 +199,25 @@ class master():
 
     def get_aliases(self):
         index_list=[]
+        client_index_list=[]
         while len(index_list)<MIN_ALIASES:
             index_list=[]
-            client_index_list=[]
+            while client_index_list:
+                self.bots[client_index_list.pop()[0]].num_clients_lock.release()
+                
             for bot_index, bot in enumerate(self.bots):
                 client_index_list.append((bot_index, bot.get_num_clients()))
             
             client_index_list.sort(key=lambda element: element[1])
-            for index, element in enumerate(client_index_list):
-                if index<=MAX_ALIASES and self.bots[element[0]].session_started_event.is_set():
+            for element in client_index_list:
+                if len(index_list)<=MAX_ALIASES and self.bots[element[0]].session_started_event.is_set():
                     index_list.append(element[0])
-                    self.bots[element[0]].num_clients+=1
-                self.bots[element[0]].num_clients_lock.release()
+                    
+        for index in index_list:
+            self.bots[index].num_clients+=1
+            
+        for bot in self.bots:
+            bot.num_clients_lock.release()
             
         return index_list
 
@@ -622,11 +629,6 @@ class master():
         
     def delete_socket(self, key):     
         del(self.client_sockets[key])
-        from_aliases=key[1]
-        for bot_index in from_aliases:
-            with self.bots[bot_index].num_clients_lock:
-                self.bots[bot_index].num_clients-=1
-                
         logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
     #handling pending disconnects

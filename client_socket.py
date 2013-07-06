@@ -152,15 +152,18 @@ class client_socket():
             with self.master.client_sockets_lock:
                 if not self.key in self.master.client_sockets:
                     return
+                self.master.delete_socket(self.key) 
+
+            for bot_index in self.from_aliases:
+                with self.master.bots[bot_index].num_clients_lock:
+                    self.master.bots[bot_index].num_clients-=1 
                     
-                self.master.delete_socket(self.key)                        
-                if send_disconnect:
-                    self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
-                    with self.master.pending_disconnects_lock: #wait for an error from the chat server
-                        to_aliases=set(self.to_aliases)
-                        self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
-                        self.master.pending_disconnect_timeout(self.key, to_aliases)
-                        from_aliases=self.pending_disconnects[key][0]
+            if send_disconnect:
+                self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
+                with self.master.pending_disconnects_lock: #wait for an error from the chat server
+                    to_aliases=set(self.to_aliases)
+                    self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
+                    self.master.pending_disconnect_timeout(self.key, to_aliases)
 
     #overwrites of asyncore methods
     def send(self, data):

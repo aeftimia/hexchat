@@ -77,9 +77,13 @@ class bot(sleekxmpp.ClientXMPP):
 
     def boot(self, process=True):
         if self.connect(self.connect_address):
-            self.karma=0.0
-            self.num_clients=0
-            self.time_last_sent=time.time()
+            with self.karma_lock:
+                self.karma=0.0
+                self.time_last_sent=time.time()
+                
+            with self.num_clients_lock:
+                self.num_clients=0
+                
             if process:
                 self.process()
         else:

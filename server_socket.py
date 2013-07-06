@@ -47,10 +47,19 @@ class server_socket(asyncore.dispatcher):
             time.sleep(CHECK_TIME)
             
         with self.master.pending_connections_lock:
-            if key in self.master.pending_connections:
-                (from_aliases, socket)=self.master.pending_connections.pop(key)
-                with self.master.peer_resources_lock:
-                    if key[1] in self.master.peer_resources:
-                        self.master.send_disconnect_error(key, from_aliases, self.master.peer_resources[key[1]])
-                    else:
-                        self.master.send_disconnect_error(key, from_aliases, key[1], message=True)
+            if not key in self.master.pending_connections:
+                return
+            (from_aliases, socket)=self.master.pending_connections.pop(key)
+            
+        socket.close()
+        
+        for bot_index in from_aliases:
+            with self.master.bots[bot_index].num_clients_lock:
+                self.master.bots[bot_index].num_clients-=1
+                
+        with self.master.peer_resources_lock:
+            if key[1] in self.master.peer_resources:
+                self.master.send_disconnect_error(key, from_aliases, self.master.peer_resources[key[1]])
+            else:
+                self.master.send_disconnect_error(key, from_aliases, key[1], message=True)
+                    
