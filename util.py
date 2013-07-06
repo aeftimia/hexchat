@@ -102,7 +102,8 @@ def format_header(local_address, remote_address, xml):
         
     return xml
 
-def karma_better(karma_vars1, karma_vars2, now):
+def karma_better(karma_vars1, karma_vars2):
+    now=time.time()
     return karma_vars1[1]/(now-karma_vars1[0])<karma_vars2[1]/(now-karma_vars2[0])
 
 

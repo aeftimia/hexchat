@@ -133,13 +133,12 @@ class master():
                     selected_karma=bot.get_karma()
                     break
                     
-        now=time.time()            
         for index in indices:
             if index is selected_index or not self.bots[index].session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
                 continue
                 
             karma=self.bots[index].get_karma()
-            if karma_better(karma, selected_karma, now):
+            if karma_better(karma, selected_karma):
                 self.bots[selected_index].karma_lock.release()
                 selected_index=index
                 selected_karma=karma
