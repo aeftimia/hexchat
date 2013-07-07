@@ -163,8 +163,8 @@ class master():
                 accumulated_bandwidth+=THROUGHPUT/(num_clients+1)
                 if accumulated_bandwidth>=ALLOCATED_BANDWIDTH:
                     break
-        if accumulated_bandwidth<ALLOCATED_BANDWIDTH:
-            logging.warn("not enough aliases for allocated bandwidth. Only have %fkb/s worth of aliases." % (accumulated_bandwidth/1000))
+        #if accumulated_bandwidth<ALLOCATED_BANDWIDTH:
+        #    logging.warn("not enough aliases for allocated bandwidth. Only have %fkb/s worth of aliases." % (accumulated_bandwidth/1000))
         for index in index_list:
             self.bots[index].num_clients+=1
             
