@@ -89,9 +89,7 @@ class master():
         while True:
             time.sleep(SELECT_LOOP_RATE)
             with self.client_sockets_lock:
-
                 if not self.socket_map:
-                    time.sleep(SELECT_TIMEOUT)
                     continue
                 sockets=list(self.socket_map)
                 (readable, writable, error)=select.select(sockets, sockets, sockets, SELECT_TIMEOUT)
@@ -122,7 +120,7 @@ class master():
                     if not client_socket.reading:
                          continue
                     client_socket.recv()
-            
+                    
     def get_best_karma(self, indices):
         selected_index=None
         while selected_index==None:
