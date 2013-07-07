@@ -148,15 +148,15 @@ class master():
         return selected_index #with karma_lock still acquired
 
     def get_aliases(self):            
-        index_list=[]
-        accumulated_bandwidth=0
         client_index_list=[]
         
         while not client_index_list:
             for bot_index, bot in enumerate(self.bots):
                 if bot.session_started_event.is_set(): 
                     client_index_list.append((bot_index, bot.get_num_clients()))
-            
+
+        index_list=[]
+        accumulated_bandwidth=0            
         client_index_list.sort(key=lambda element: element[1])
         for element in client_index_list:
             (bot_index, num_clients)=element
@@ -165,7 +165,8 @@ class master():
                 accumulated_bandwidth+=THROUGHPUT/(num_clients+1)
                 if accumulated_bandwidth>=ALLOCATED_BANDWIDTH:
                     break
-                          
+        if accumulated_bandwidth<ALLOCATED_BANDWIDTH:
+            logging.warn("not enough aliases for allocated bandwidth. Only have %fkb/s worth of aliases." % (accumulated_bandwidth/1000))
         for index in index_list:
             self.bots[index].num_clients+=1
             

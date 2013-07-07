@@ -1,4 +1,5 @@
 import asyncore
+from errno import EMFILE
 import logging
 import socket
 import threading
@@ -22,10 +23,18 @@ class server_socket(asyncore.dispatcher):
 
     def accept_thread(self):
         while True:
-            connection, local_address = self.accept()
-            aliases=self.master.get_aliases()
+            try:
+                connection, local_address = self.accept()
+            except socket.error as why:
+                if why.args[0]==EMFILE:
+                    logging.warn("too many connections")
+                    continue
+                else:
+                    raise
+                    
             with self.master.pending_connections_lock:
                 logging.debug("sending connection request from %s:%d" % local_address + " to %s:%d" % self.remote_address)
+                aliases=self.master.get_aliases()
                 key=(local_address, self.peer, self.remote_address)
                 self.master.pending_connections[key]=(aliases, connection)
                 with self.master.peer_resources_lock:

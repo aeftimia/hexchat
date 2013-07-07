@@ -8,7 +8,7 @@ import sys
 
 from util import format_header, ElementTree, Iq
 from util import MAX_ID, MAX_DB_SIZE, MAX_SIZE
-from util import KARMA_RESET, ALLOCATED_BANDWIDTH
+from util import KARMA_RESET, ALLOCATED_BANDWIDTH, THROUGHPUT
 
 class client_socket():
     def __init__(self, master, key, from_aliases, socket):
@@ -129,8 +129,18 @@ class client_socket():
         self.karma_lock.acquire()
         return (self.karma, self.time_last_sent)
 
+    #not currently used, but may be useful at some point
+    def get_allocated_bandwidth(self):
+        bandwidth=0
+        for index in self.from_aliases:
+            bot=self.master.bots[index]
+            if bot.session_started_event.is_set():
+                bandwidth+=THROUGHPUT/bot.get_num_clients()
+                bot.num_clients_lock.release()
+        return bandwidth
+
     #socket methods
-    def send(self, data):
+    def send(self, data):            
         try:
             result = self.socket.send(data)
             return result
@@ -141,7 +151,7 @@ class client_socket():
             else:
                 raise
 
-    def recv(self):
+    def recv(self):            
         (karma, time_last_sent)=self.get_karma()
         dtime=time.time()-time_last_sent
         if (MAX_SIZE+karma)/(dtime+KARMA_RESET)>ALLOCATED_BANDWIDTH:

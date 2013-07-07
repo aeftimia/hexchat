@@ -11,7 +11,7 @@ MAX_ID=2**32-1
 MAX_DB_SIZE=2**22 #bytes
 MAX_SIZE=2**15 #bytes
 
-TIMEOUT=300.0 #seconds before closing a socket if it has not gotten a connect_ack
+TIMEOUT=30.0 #seconds before closing a socket if it has not gotten a connect_ack
 CHECK_RATE=0.1 #seconds to check for a condition
 
 CONNECT_TIMEOUT=1.0 #time to wait to try to connect a socket to the requested ip:port
