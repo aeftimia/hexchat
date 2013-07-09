@@ -235,16 +235,14 @@ class master():
     def error_handler(self, iq):
         logging.warn(iq['from'].full + " unavailable")
         with self.peer_resources_lock:
-            if iq['from'].bare in self.peer_resources:
-                if iq['from'].full in self.peer_resources[iq['from'].bare]:
-                    self.peer_resources[iq['from'].bare].remove(iq['from'].bare, iq['from'].full)
+            self.peer_resources.remove(iq['from'].full)
 
         with self.pending_connections_lock:
             for key0 in self.pending_connections:
                 if iq['from'].bare==key0[1]:
                     sock=self.pending_connections[key0][1]
                     sock.close()
-                    del(self.pending_connections[key0])
+                    del self.pending_connections[key0]
 
         with self.pending_disconnects_lock:
             for key in self.pending_disconnects.copy():
@@ -254,7 +252,7 @@ class master():
                         self.send_disconnect(key, self.pending_disconnects[key][0], self.pending_disconnects[key][1].copy().pop())
                         self.pending_disconnect_timeout(key, self.pending_disconnects[key][1])
                     else:
-                        del(self.pending_disconnects[key])
+                        del self.pending_disconnects[key]
 
         with self.client_sockets_lock:
             for key in self.client_sockets:
@@ -293,7 +291,7 @@ class master():
         if iq['connect_ack']['response']=="failure":
             with self.pending_connections_lock:
                 self.pending_connections[key0][1].close()
-                del(self.pending_connections[key0])
+                del self.pending_connections[key0]
                 return
     
         aliases=alias_decode(iq, 'connect_ack')
@@ -465,7 +463,7 @@ class master():
                 else:
                     self.connection_requests[key]=1
                 if self.connection_requests[key]==self.num_logins:
-                    del(self.connection_requests[key])
+                    del self.connection_requests[key]
                 else:
                     return
                 
@@ -507,8 +505,8 @@ class master():
         self.client_sockets[key].handle_close()
         
     def delete_socket(self, key):
-        del(self.socket_map[self.client_sockets[key].socket])
-        del(self.client_sockets[key])
+        del self.socket_map[self.client_sockets[key].socket]
+        del self.client_sockets[key]
         logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
     #handling pending disconnects
@@ -524,4 +522,4 @@ class master():
         
         with self.pending_disconnects_lock:
             if key in self.pending_disconnects and self.pending_disconnects[key][1]==to_aliases:
-                del(self.pending_disconnects[key])
+                del self.pending_disconnects[key]

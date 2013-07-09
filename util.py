@@ -142,10 +142,12 @@ class Peer_Resource_DB():
         self.index[key]=(self.index[key]+1)%len(resources)
         return resource
 
-    def remove(self, key, resource):
-        self.dict[key].remove(resource)
-        if not self.dict[key]:
-            del(self.dict[key])
-            del(self.index[key])
-        else:
-            self.index[key]=self.index[key]%len(self.dict[key])
+    def remove(self, resource):
+        for key in self.dict:
+            if resource in self.dict[key]:
+                self.dict[key].remove(resource)
+                if not self.dict[key]:
+                    del self.dict[key]
+                    del self.index[key]
+                else:
+                    self.index[key]=self.index[key]%len(self.dict[key])
