@@ -21,26 +21,39 @@ SELECT_LOOP_RATE=0.01 #rate to poll sockets
 
 ALLOCATED_BANDWIDTH=64*10**3 #bytes/second to allocate to each connection
 
-#construct key from msg
+#convert message to key
 def msg_to_key(msg, aliases):
+    '''construct key from msg'''
     if len(msg['remote_port'])>6 or len(msg['local_port'])>6:
         #these ports are way too long
         raise(ValueError)
-        
+
+    '''
+    Your "remote" is my "local"
+    Your "local" is my "remote"
+    '''
     local_port=int(msg['remote_port'])
     remote_port=int(msg['local_port'])
-            
+
     local_ip=msg['remote_ip']
     remote_ip=msg['local_ip']
 
     local_address=(local_ip, local_port)
     remote_address=(remote_ip,remote_port)
-    
+
     key=(local_address, aliases, remote_address)
-    
+
     return key
 
+#decode formatted "aliass" stanza
 def alias_decode(msg, root):
+    '''
+    The aliases stanza contains a list of JIDs the sender can be reached by.
+    It is specially formatted to save space.
+    This function takes a message,
+    extracts the aliases stanza from the xml,
+    and returns a set of JIDs.
+    '''
     element_tree=msg.xml
     xml_dict=elementtree_to_dict(element_tree)
     root_dict=xml_dict[root][0]
@@ -54,11 +67,15 @@ def alias_decode(msg, root):
             resources=alias_dict[server][0][user][0].split(",")
             for resource in resources:
                 aliases.add("%s@%s/%s" % (user, server, resource))
-    
+
     return frozenset(aliases)
 
-#modified from http://codereview.stackexchange.com/questions/10400/convert-elementtree-to-dict
+#convert ElementTree class to a dict
 def elementtree_to_dict(element):
+    '''
+    adapted from
+    http://codereview.stackexchange.com/questions/10400/convert-elementtree-to-dict
+    '''
     node = dict()
 
     text = getattr(element, 'text', None)
@@ -77,21 +94,27 @@ def elementtree_to_dict(element):
     return nodes
 
 def get_tag(element):
+    '''
+    Element Tree tags look like this:
+    "{some xmlns}actual tag"
+    We just want:
+    "actual tag".
+    '''
     if element.tag[0] == "{":
         return element.tag[1:].partition("}")[2]
     else:
         return elem.tag
 
 #turn local address and remote address into xml stanzas in the given element tree
-def format_header(local_address, remote_address, xml):       
+def format_header(local_address, remote_address, xml):
     local_ip_stanza=ElementTree.Element("local_ip")
     local_ip_stanza.text=local_address[0]
-    xml.append(local_ip_stanza)      
-              
+    xml.append(local_ip_stanza)
+
     local_port_stanza=ElementTree.Element("local_port")
     local_port_stanza.text=str(local_address[1])
     xml.append(local_port_stanza)
-        
+
     remote_ip_stanza=ElementTree.Element("remote_ip")
     remote_ip_stanza.text=remote_address[0]
     xml.append(remote_ip_stanza)
@@ -99,15 +122,28 @@ def format_header(local_address, remote_address, xml):
     remote_port_stanza=ElementTree.Element("remote_port")
     remote_port_stanza.text=str(remote_address[1])
     xml.append(remote_port_stanza)
-        
+
     return xml
 
 def karma_better(karma_vars1, karma_vars2):
+    '''
+    Compare karmas from
+    (current karma, time of last sent message) tuples.
+    '''
     now=time.time()
     return karma_vars1[1]/(now-karma_vars1[0])<karma_vars2[1]/(now-karma_vars2[0])
 
 
+#Send a message immediately
 def send_thread(str_data, bot):
+    '''
+    This function is executed as a thread.
+    It acquires the bot's send_lock
+    (preventing it from sending more messages),
+    sends the message,
+    and sleeps so the rate at which the bot is sending data
+    remains less than THROUGHPUT.
+    '''
     sleep_seconds=len(str_data)/THROUGHPUT
     with bot.send_lock:
         then=time.time()
@@ -117,11 +153,19 @@ def send_thread(str_data, bot):
             time.sleep(sleep_seconds-dtime)
 
 class Peer_Resource_DB():
-
+    '''
+    Class used to store full JIDs that can be used in the stead of a bare one.
+    So when a client is programmed to send a messge to bare JID,
+    (i.e. of the form user@server)
+    it checks an instance of this class for any full JIDs
+    (i.e. of the form user@server/resource)
+    that can be used in the bare JID's stead.
+    '''
     def __init__(self):
         self.dict={}
         self.index={}
-        
+
+    #add a full JID
     def add(self, key, resource):
         if key in self.dict:
             if resource in self.dict[key]:
@@ -136,12 +180,18 @@ class Peer_Resource_DB():
         return key in self.dict
 
     def __getitem__(self, key):
+        '''
+        Retreive a full JID that can be used in the stead of a
+        some bare JID.
+        Retreive round-robin style.
+        '''
         resources=self.dict[key]
         index=self.index[key]
         resource=resources[index]
         self.index[key]=(self.index[key]+1)%len(resources)
         return resource
 
+    #remove a full JID from database
     def remove(self, resource):
         for key in self.dict:
             if resource in self.dict[key]:

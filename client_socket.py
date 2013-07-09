@@ -11,36 +11,57 @@ from util import MAX_ID, MAX_DB_SIZE, MAX_SIZE
 from util import KARMA_RESET, ALLOCATED_BANDWIDTH, THROUGHPUT
 
 class client_socket():
+    '''
+    Class used to access sockets
+    These are the sockets NOT being used to talk with the chat server.
+    '''
     def __init__(self, master, key, from_aliases, socket):
         self.master=master
         self.key=key
-        self.write_buffer=b''
-        self.to_aliases=list(self.key[1])
-        self.to_alias_index=0
+        self.write_buffer=b'' #used to buffer data to be written
+        self.to_aliases=list(self.key[1]) #aliases to send messages to
+        self.to_alias_index=0 #index used for round-robin scheduling
         self.to_alias_lock=threading.Lock()
+        '''
+        from_aliases is a
+        set of indices that correspond
+        to aliases to send messages from.
+        The indices are used to access a bot from master's self.bots
+        '''
         self.from_aliases=from_aliases
-        self.id=0
-        self.last_id_received=0
-        self.incomming_message_db={}
-        self.reading=True
+        self.id=0 #the id used to send the next message
+        self.last_id_received=0 #id of the last message that resulted in a write
+        self.incomming_message_db={} #used to lookup chunks of data from id numbers
+        self.reading=True #whether to read data from the socket
+        self.reading_lock=threading.Lock()
         socket.setblocking(0)
         self.socket=socket
-        self.karma=0.0
+        self.karma=0.0 #rate at which socket has been sending data over the chat server
         self.karma_lock=threading.Lock()
-        self.time_last_sent=time.time()
+        self.time_last_sent=time.time() #time at which the socket last sent a message
+
 
     def get_to_alias(self):
+
+        '''get a JID to send the message to'''
+
         with self.to_alias_lock:
             to_alias=self.to_aliases[self.to_alias_index]
             self.to_alias_index=(self.to_alias_index+1)%len(self.to_aliases)
             return to_alias
 
     def get_id(self):
+
+        '''get an id give the message'''
+
         iq_id=self.id
         self.id=(self.id+1)%MAX_ID
         return iq_id
 
     def send_message(self, data):
+
+        '''send data as a message over the chat server'''
+
         (local_address, remote_address)=(self.key[0], self.key[2])
         packet=format_header(local_address, remote_address, ElementTree.Element('packet'))
         packet.attrib['xmlns']="hexchat:packet"
@@ -48,7 +69,7 @@ class client_socket():
         id_stanza=ElementTree.Element('id')
         id_stanza.text=str(self.get_id())
         packet.append(id_stanza)
-        
+
         data_stanza=ElementTree.Element('data')
         data_stanza.text=base64.b64encode(data).decode("UTF-8")
         packet.append(data_stanza)
@@ -57,16 +78,22 @@ class client_socket():
         iq['to']=self.get_to_alias()
         iq['type']='set'
         iq.append(packet)
-        
-        return self.master.send(iq, self.from_aliases)
-        
+
+        return self.master.send(iq, self.from_aliases) #return number of bytes sent
+
     def buffer_message(self, iq_id, data):
+
+        '''process data and add it to a buffer'''
+
         if data=="disconnect":
+            #stop further reading
+            #even if there is more data
+            #to be written
             self.reading=False
-                        
+
         raw_id_diff=iq_id-self.last_id_received
         id_diff=raw_id_diff%MAX_ID
-                        
+
         if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or iq_id in self.incomming_message_db or sys.getsizeof(self.incomming_message_db)>=MAX_DB_SIZE:
                 logging.warn("received redundant message or too many messages in buffer. Disconnecting")
                 self.handle_close(True)
@@ -88,21 +115,23 @@ class client_socket():
             self.last_id_received=(self.last_id_received+1)%MAX_ID
             logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
             self.write_buffer+=data
-        
+
         self.master.client_sockets_lock.release()
 
     def handle_close(self, send_disconnect=False):
-        """Called when the TCP client socket closes."""
+
+        '''Called when the TCP client socket closes.'''
+
         (local_address, remote_address)=(self.key[0], self.key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
         self.close()
-        
+
         self.master.delete_socket(self.key)
-         
+
         for bot_index in self.from_aliases:
             with self.master.bots[bot_index].num_clients_lock:
-                self.master.bots[bot_index].num_clients-=1 
-                    
+                self.master.bots[bot_index].num_clients-=1
+
         if send_disconnect:
             self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
             with self.master.pending_disconnects_lock: #wait for an error from the chat server
@@ -110,54 +139,68 @@ class client_socket():
                 self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
                 self.master.pending_disconnect_timeout(self.key, to_aliases)
 
-    #karma methods
+    ### karma methods
+
     def set_karma(self, num_bytes):
+        
+        '''set karma and time_last_sent'''
+        
         now=time.time()
         dtime=now-self.time_last_sent
         if dtime>KARMA_RESET:
             self.karma=num_bytes
-        else: #compute moving average
-              #note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
-              #and as dtime-->0, the new self.karma-->num_bytes+self.karma
+        else:
+            '''
+            compute moving average
+            note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
+            and as dtime-->0, the new self.karma-->num_bytes+self.karma
+            '''
             self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)
 
-        self.time_last_sent=now        
+        self.time_last_sent=now
         self.karma_lock.release()
 
 
     def get_karma(self):
+        
+        '''get current karma and time_last_sent'''
+        
         self.karma_lock.acquire()
         return (self.karma, self.time_last_sent)
 
-    #not currently used, but may be useful at some point
-    def get_allocated_bandwidth(self):
-        bandwidth=0
-        for index in self.from_aliases:
-            bot=self.master.bots[index]
-            if bot.session_started_event.is_set():
-                bandwidth+=THROUGHPUT/bot.get_num_clients()
-                bot.num_clients_lock.release()
-        return bandwidth
+    ### socket methods
 
-    #socket methods
-    def send(self, data):            
+    def send(self):
+
+        '''write data to socket'''
+        
+        if not self.write_buffer:
+            return
+
         try:
-            result = self.socket.send(data)
-            return result
+            bytes = self.socket.send(self.write_buffer)
         except socket.error as why:
             if why.args[0] in asyncore._DISCONNECTED:
                 self.handle_close(True)
-                return 0
+                return
             else:
                 raise
+        self.write_buffer=self.write_buffer[bytes:]
 
-    def recv(self):            
+    def recv(self):
+
+        '''read data from socket'''
+
+        if not self.reading:
+            return
+
         (karma, time_last_sent)=self.get_karma()
         dtime=time.time()-time_last_sent
         if (MAX_SIZE+karma)/(dtime+KARMA_RESET)>ALLOCATED_BANDWIDTH:
+            #enforce bandwidth limitation
             self.karma_lock.release()
             return
-        try:                
+        try:
             data = self.socket.recv(MAX_SIZE)
             if not data:
                 # a closed connection is indicated by signaling
@@ -181,7 +224,7 @@ class client_socket():
         except socket.error as why:
             if why.args[0] not in (asyncore.ENOTCONN, asyncore.EBADF):
                 raise
-                
+
     def handle_expt_event(self):
         # handle_expt_event() is called if there might be an error on the
         # socket, or if there is OOB data

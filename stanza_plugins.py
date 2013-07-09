@@ -15,7 +15,7 @@ class hexchat_connect_ack(sleekxmpp.xmlstream.stanzabase.ElementBase):
     interfaces = set(('local_ip','local_port','remote_ip','remote_port','response'))
     sub_interfaces=interfaces
     bool_interfaces = interfaces
-    
+
 class hexchat_packet(sleekxmpp.xmlstream.stanzabase.ElementBase):
     name = 'packet'
     namespace = 'hexchat:packet'
@@ -46,6 +46,6 @@ def register_stanza_plugins():
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_connect_ack)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_packet)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect)
-    
+
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Message, hexchat_disconnect_error)
     sleekxmpp.xmlstream.register_stanza_plugin(sleekxmpp.stanza.Iq, hexchat_disconnect_error)

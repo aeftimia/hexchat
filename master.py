@@ -23,6 +23,11 @@ class master():
 
         'jid' is the login username@chatserver
         'password' is the password to login with
+
+        *jid_passwords contain tuples of the form (jid, password)
+        *whitelist contains a list of ip:ports that we are allowed to connect to
+        *num_logins is the number of times to login with a given JID
+        *sequential_bootup determines whether to log into each account sequentially or concurrently
         """
 
         #whitelist of trusted ip addresses client sockets can connect to
@@ -65,8 +70,8 @@ class master():
         self.peer_resources_lock=threading.Lock()
         self.connection_requests_lock=threading.Lock()
         self.pending_disconnects_lock=threading.Lock()
-               
-        #initialize the other sleekxmpp clients.
+
+        #initialize the sleekxmpp bots.
         self.bots=[]
         for login_num in range(self.num_logins):
             for jid_password in jid_passwords:
@@ -76,16 +81,22 @@ class master():
                 else:
                     threading.Thread(name="booting %d %d" % (hash(jid_password), login_num), target=lambda: bot0.boot()).start()
                 self.bots.append(bot0)
-                    
+
         while False in map(lambda bot: bot.session_started_event.is_set(), self.bots):
+            #wait for all the bots to start up
             time.sleep(CHECK_RATE)
 
         for index in range(len(self.bots)):
+            #register message handlers on each bot
             self.bots[index].register_hexchat_handlers()
 
+        #start processing sockets with select
         threading.Thread(name="loop %d" % hash(frozenset(map(lambda bot: bot.boundjid.full, self.bots))), target=lambda: self.select_loop()).start()
 
     def select_loop(self):
+
+        '''process sockets with select call'''
+
         while True:
             time.sleep(SELECT_LOOP_RATE)
             with self.client_sockets_lock:
@@ -98,7 +109,7 @@ class master():
                 for socket in error:
                     key=self.socket_map[socket]
                     client_socket=self.client_sockets[key]
-                    client_socket.handle_expt_event()               
+                    client_socket.handle_expt_event()
 
                 #write
                 for socket in writable:
@@ -106,22 +117,23 @@ class master():
                         continue
                     key=self.socket_map[socket]
                     client_socket=self.client_sockets[key]
-                    write_buffer=client_socket.write_buffer
-                    if write_buffer:
-                        bytes=client_socket.send(write_buffer)
-                        client_socket.write_buffer=write_buffer[bytes:]
-                        
+                    client_socket.send()
+                    
                 #read
                 for socket in readable:
                     if not socket in self.socket_map:
                         continue
                     key=self.socket_map[socket]
                     client_socket=self.client_sockets[key]
-                    if not client_socket.reading:
-                         continue
                     client_socket.recv()
-                    
+
     def get_best_karma(self, indices):
+
+        '''
+        Get the bot with the best karma
+        i.e. the one that has been sending the least data
+        '''
+
         selected_index=None
         while selected_index==None:
             for index in indices:
@@ -130,50 +142,58 @@ class master():
                     selected_index=index
                     selected_karma=bot.get_karma()
                     break
-                    
+
         for index in indices:
             if index is selected_index or not self.bots[index].session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
                 continue
-                
-            karma=self.bots[index].get_karma()
-            if karma_better(karma, selected_karma):
+
+            karma_vars=self.bots[index].get_karma()
+            if karma_better(karma_vars, selected_karma):
                 self.bots[selected_index].karma_lock.release()
                 selected_index=index
-                selected_karma=karma
+                selected_karma=karma_vars
             else:
                 self.bots[index].karma_lock.release()
 
         return selected_index #with karma_lock still acquired
 
-    def get_aliases(self):            
+    def get_aliases(self):
+
+        '''Get bots that are being used least'''
+
         client_index_list=[]
-        
-        while not client_index_list:
+
+        while not client_index_list: #wait until at least one bot has started up
             for bot_index, bot in enumerate(self.bots):
-                if bot.session_started_event.is_set(): 
+                if bot.session_started_event.is_set():
                     client_index_list.append((bot_index, bot.get_num_clients()))
 
         index_list=[]
-        accumulated_bandwidth=0            
+        accumulated_bandwidth=0 #total shared bandwidth
         client_index_list.sort(key=lambda element: element[1])
         for element in client_index_list:
             (bot_index, num_clients)=element
             if self.bots[bot_index].session_started_event.is_set():
                 index_list.append(bot_index)
-                accumulated_bandwidth+=THROUGHPUT/(num_clients+1)
+                #divide throughput by 1 + the number of clients given this bot
+                shared_bandwidth=THROUGHPUT/(num_clients+1)
+                accumulated_bandwidth+=shared_bandwidth
                 if accumulated_bandwidth>=ALLOCATED_BANDWIDTH:
+                    #make sure we do not go over the allocated bandwidth
                     break
-        #if accumulated_bandwidth<ALLOCATED_BANDWIDTH:
-        #    logging.warn("not enough aliases for allocated bandwidth. Only have %fkb/s worth of aliases." % (accumulated_bandwidth/1000))
+
         for index in index_list:
             self.bots[index].num_clients+=1
-            
+
         while client_index_list:
             self.bots[client_index_list.pop()[0]].num_clients_lock.release()
-            
+
         return index_list
 
     def add_aliases(self, xml, aliases):
+
+        '''add an aliases stanza containing a list of JIDs that we can be reached by'''
+
         aliases_stanza=ElementTree.Element("aliases")
         bots=self.aliases_to_bots(aliases)
         servers={}
@@ -199,22 +219,28 @@ class master():
                 user_stanza.text=",".join(servers[server][user])
                 server_stanza.append(user_stanza)
             aliases_stanza.append(server_stanza)
-            
+
         xml.append(aliases_stanza)
 
         return xml
 
     def aliases_to_bots(self, from_aliases):
-       return map(lambda index: self.bots[index], from_aliases)
+
+        '''lookup bots from a list of indices'''
+
+        return map(lambda index: self.bots[index], from_aliases)
 
     def iq_to_key(self, iq, jid):
+
+        '''resolve key from iq'''
+
         if len(iq['remote_port'])>6 or len(iq['local_port'])>6:
             #these ports are way too long
             raise(ValueError)
-        
+
         local_port=int(iq['remote_port'])
         remote_port=int(iq['local_port'])
-            
+
         local_ip=iq['remote_ip']
         remote_ip=iq['local_ip']
 
@@ -222,17 +248,30 @@ class master():
         remote_address=(remote_ip,remote_port)
 
         self.client_sockets_lock.acquire()
-        
+
         for key in self.client_sockets:
-            if jid in key[1] and local_address==key[0] and remote_address==key[2]:
+            '''
+            Find a key that:
+            *has the correct local address
+            *has the correct remote address
+            *has jid in its list of JIDs
+            '''
+            if local_address==key[0] and remote_address==key[2] and jid in key[1]:
                 return key
 
         self.client_sockets_lock.release()
         raise KeyError
-            
+
     #incomming xml handlers
 
     def error_handler(self, iq):
+
+        '''
+        Handle error messsage sent from chat server.
+        This usually happens when the recipient of the message is not logged in.
+        We will assume that this is the reason.
+        '''
+
         logging.warn(iq['from'].full + " unavailable")
         with self.peer_resources_lock:
             self.peer_resources.remove(iq['from'].full)
@@ -271,14 +310,14 @@ class master():
         if not msg['from'].full in aliases:
             logging.warn("received message with a from address that is not in its aliases")
             return
-                    
+
         try:
             key=msg_to_key(msg['connect'], aliases)
         except ValueError:
             logging.warn('received invalid connect')
             return
-        
-        threading.Thread(name="initate connection %d" % hash(key), target=lambda: self.initiate_connection(key, msg['to'])).start() 
+
+        threading.Thread(name="initate connection %d" % hash(key), target=lambda: self.initiate_connection(key, msg['to'])).start()
 
     def connect_ack_handler(self, iq):
         try:
@@ -286,27 +325,27 @@ class master():
         except ValueError:
             logging.warn('received invalid connect_ack')
             return
-            
+
         logging.debug("%s:%d received connection result: " % key0[0] + iq['connect_ack']['response'] + " from %s:%d" % key0[2])
         if iq['connect_ack']['response']=="failure":
             with self.pending_connections_lock:
                 self.pending_connections[key0][1].close()
                 del self.pending_connections[key0]
                 return
-    
+
         aliases=alias_decode(iq, 'connect_ack')
-        
+
         with self.pending_connections_lock:
             if not key0 in self.pending_connections:
                 logging.warn('iq not in pending connections')
                 return
-                
+
             with self.peer_resources_lock:
                 self.peer_resources.add(key0[1], iq['from'].full)
-            
+
             (from_aliases, socket)=self.pending_connections.pop(key0)
             key=(key0[0], aliases, key0[2])
-                
+
         with self.client_sockets_lock:
             self.create_client_socket(key, from_aliases, socket)
 
@@ -321,7 +360,7 @@ class master():
             iq=iq['disconnect']
             logging.warn("%s:%s seemed to forge a disconnect to %s:%s." % (iq['local_ip'],iq['local_port'],iq['remote_ip'],iq['remote_port']))
             return
-            
+
         #client wants to disconnect
         if iq['disconnect']['id']=="None":
             self.close_socket(key)
@@ -340,18 +379,18 @@ class master():
 
     def disconnect_error_handler(self, msg):
         """Handles incoming xmpp messages for disconnections due to errors"""
-        
+
         aliases=alias_decode(msg, 'disconnect_error')
         if not msg['from'].full in aliases:
             logging.warn("received message with a from address that is not in its aliases")
             return
-                    
+
         try:
             key=msg_to_key(msg['disconnect_error'], aliases)
         except ValueError:
             logging.warn('received bad port')
             return
-            
+
         with self.client_sockets_lock:
             if key in self.client_sockets:
                 self.close_socket(key)
@@ -393,7 +432,7 @@ class master():
         self.client_sockets[key].buffer_message(iq_id, data)
 
     #methods for sending xml
-        
+
     def send_connect_ack(self, key, response, jid):
         (local_address, remote_address)=(key[0], key[2])
         packet=format_header(local_address, remote_address, ElementTree.Element("connect_ack"))
@@ -405,9 +444,9 @@ class master():
         if response=="success":
             aliases=self.get_aliases()
             packet=self.add_aliases(packet, aliases)
-            
+
         logging.debug("%s:%d" % local_address + " sending result signal to %s:%d" % remote_address)
-        
+
         indices=[index for index, bot in enumerate(self.bots) if bot.boundjid.bare==jid.bare]
         iq=Iq()
         iq['to']=set(key[1]).pop()
@@ -415,7 +454,7 @@ class master():
         iq.append(packet)
 
         self.send(iq, indices, now=True)
-        
+
         if response=="success":
             return aliases
 
@@ -429,11 +468,11 @@ class master():
         id_stanza=ElementTree.Element('id')
         id_stanza.text=str(iq_id)
         packet.append(id_stanza)
-            
+
         iq['to']=to_alias
         iq['type']='set'
         iq.append(packet)
-        
+
         self.send(iq, from_aliases, now=True)
 
     def send(self, data, aliases, now=False):
@@ -445,7 +484,7 @@ class master():
         selected_bot.set_karma(num_bytes)
         if now:
             threading.Thread(name="send from %s to %s" % (data['from'], data['to']), target=lambda: send_thread(str_data, selected_bot)).start()
-        else:   
+        else:
             selected_bot.send_queue.put(str_data)
 
         return len(str_data)
@@ -466,14 +505,14 @@ class master():
                     del self.connection_requests[key]
                 else:
                     return
-                
+
         (local_address, peer, remote_address)=key
 
         if self.whitelist!=None and not local_address in self.whitelist:
             logging.warn("client sent request to connect to %s:%d" % local_address)
             self.send_connect_ack(key, "failure", jid)
             return
-                
+
         try: # connect to the ip:port
             logging.debug("trying to connect to %s:%d" % local_address)
             connected_socket=socket.create_connection(local_address, timeout=CONNECT_TIMEOUT)
@@ -482,12 +521,12 @@ class master():
             #if it could not connect, tell the bot on the the other it could not connect
             self.send_connect_ack(key, "failure", jid)
             return
-            
+
         with self.client_sockets_lock:
             if key in self.client_sockets:
                 connected_socket.close()
                 self.send_connect_ack(key, "failure", jid)
-                return    
+                return
             logging.debug("connecting %s:%d" % remote_address + " to %s:%d" % local_address)
             from_aliases=self.send_connect_ack(key, "success", jid)
             self.create_client_socket(key, from_aliases, connected_socket)
@@ -503,7 +542,7 @@ class master():
 
     def close_socket(self, key):
         self.client_sockets[key].handle_close()
-        
+
     def delete_socket(self, key):
         del self.socket_map[self.client_sockets[key].socket]
         del self.client_sockets[key]
@@ -511,15 +550,27 @@ class master():
 
     #handling pending disconnects
     def pending_disconnect_timeout(self, key, to_aliases):
+        '''
+        Run a thread to check if an error message has been received on a disconnect
+        '''
         threading.Thread(name="pending disconnect timeout %d %d" % (hash(key), hash(frozenset(to_aliases))), target=lambda: self.pending_disconnect_timeout_thread(key, to_aliases)).start()
+
     def pending_disconnect_timeout_thread(self, key, to_aliases):
+        
+        '''
+        Check whether an error message has been received on a disconnect
+        within a certain amount of time.
+        '''
+        
         then=time.time()+PENDING_DISCONNECT_TIMEOUT
         while time.time()<then:
             with self.pending_disconnects_lock:
                 if not (key in self.pending_disconnects and self.pending_disconnects[key][1]==to_aliases):
+                    #An error message must have been received.
+                    #Kill this thread, because another one should have been started
                     return
             time.sleep(CHECK_RATE)
-        
-        with self.pending_disconnects_lock:
+
+        with self.pending_disconnects_lock: #timeout
             if key in self.pending_disconnects and self.pending_disconnects[key][1]==to_aliases:
                 del self.pending_disconnects[key]
