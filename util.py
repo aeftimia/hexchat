@@ -193,7 +193,7 @@ class Peer_Resource_DB():
 
     #remove a full JID from database
     def remove(self, resource):
-        for key in self.dict:
+        for key in self.dict.copy():
             if resource in self.dict[key]:
                 self.dict[key].remove(resource)
                 if not self.dict[key]:

@@ -277,7 +277,7 @@ class master():
             self.peer_resources.remove(iq['from'].full)
 
         with self.pending_connections_lock:
-            for key0 in self.pending_connections:
+            for key0 in self.pending_connections.copy():
                 if iq['from'].bare==key0[1]:
                     sock=self.pending_connections[key0][1]
                     sock.close()
