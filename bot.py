@@ -123,7 +123,6 @@ class bot(sleekxmpp.ClientXMPP):
         
         try:
             while not self.stop.is_set():
-                then=time.time() #added code
                 while not self.stop.is_set() and \
                       not self.session_started_event.is_set():
                     self.session_started_event.wait(timeout=0.1)
@@ -146,8 +145,15 @@ class bot(sleekxmpp.ClientXMPP):
                         while sent < total and not self.stop.is_set() and \
                               self.session_started_event.is_set():
                             try:
-                                sent += self.socket.send(enc_data[sent:])
+                                bytes = self.socket.send(enc_data[sent:])
+                                sent += bytes
                                 count += 1
+                                '''
+                                throttling code
+                                that prevents data from being sent
+                                faster than THROUGHPUT
+                                '''
+                                time.sleep(bytes/THROUGHPUT)
                             except ssl.SSLError as serr:
                                 if tries >= self.ssl_retry_max:
                                     logging.debug('SSL error: max retries reached')
@@ -163,15 +169,6 @@ class bot(sleekxmpp.ClientXMPP):
                     if count > 1:
                         logging.debug('SENT: %d chunks', count)
                     self.send_queue.task_done()
-                    '''
-                    throttling code
-                    that prevents data from being sent
-                    faster than THROUGHPUT
-                    '''
-                    dtime=time.time()-then
-                    sleep_time=total/THROUGHPUT
-                    if sleep_time>dtime:
-                        time.sleep(sleep_time-dtime)
                 except (Socket.error, ssl.SSLError) as serr:
                     self.event('socket_error', serr, direct=True)
                     logging.warning("Failed to send %s", data)
