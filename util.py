@@ -4,12 +4,12 @@ import xml.etree.cElementTree as ElementTree
 from sleekxmpp.xmlstream import tostring
 from sleekxmpp.stanza import Message, Iq
 
-KARMA_RESET=10.0 #seconds
+SEND_RATE_RESET=10.0 #seconds
 THROUGHPUT=4.9*10**3 #bytes/second
 
 MAX_ID=2**32-1
 MAX_DB_SIZE=2**22 #bytes
-MAX_SIZE=2**15 #bytes
+RECV_RATE=4096 #bytes
 
 TIMEOUT=30.0 #seconds before closing a socket if it has not gotten a connect_ack
 CHECK_RATE=0.1 #seconds to check for a condition
@@ -17,7 +17,7 @@ CHECK_RATE=0.1 #seconds to check for a condition
 CONNECT_TIMEOUT=1.0 #time to wait to try to connect a socket to the requested ip:port
 PENDING_DISCONNECT_TIMEOUT=2.0 #time to wait for the chat server to send an error
 SELECT_TIMEOUT=0.0
-SELECT_LOOP_RATE=0.01 #rate to poll sockets
+SELECT_LOOP_RATE=0.005 #rate to poll sockets
 
 ALLOCATED_BANDWIDTH=64*10**3 #bytes/second to allocate to each connection
 
@@ -125,15 +125,6 @@ def format_header(local_address, remote_address, xml):
 
     return xml
 
-def karma_better(karma_vars1, karma_vars2):
-    '''
-    Compare karmas from
-    (current karma, time of last sent message) tuples.
-    '''
-    now=time.time()
-    return karma_vars1[1]/(now-karma_vars1[0])<karma_vars2[1]/(now-karma_vars2[0])
-
-
 #Send a message immediately
 def send_thread(str_data, bot):
     '''
@@ -144,13 +135,16 @@ def send_thread(str_data, bot):
     and sleeps so the rate at which the bot is sending data
     remains less than THROUGHPUT.
     '''
-    sleep_seconds=len(str_data)/THROUGHPUT
+    num_bytes=len(str_data)
+    sleep_seconds=num_bytes/THROUGHPUT
     with bot.send_lock:
         then=time.time()
         bot.send_raw(str_data, now=True)
         dtime=time.time()-then
         if dtime<sleep_seconds:
             time.sleep(sleep_seconds-dtime)
+        with bot.buffer_size_lock:
+            bot.buffer_size-=num_bytes
 
 class Peer_Resource_DB():
     '''

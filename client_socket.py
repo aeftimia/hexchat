@@ -7,8 +7,8 @@ import time
 import sys
 
 from util import format_header, ElementTree, Iq
-from util import MAX_ID, MAX_DB_SIZE, MAX_SIZE
-from util import KARMA_RESET, ALLOCATED_BANDWIDTH, THROUGHPUT
+from util import MAX_ID, MAX_DB_SIZE, RECV_RATE
+from util import SEND_RATE_RESET, ALLOCATED_BANDWIDTH, THROUGHPUT
 
 class client_socket():
     '''
@@ -36,8 +36,8 @@ class client_socket():
         self.reading_lock=threading.Lock()
         socket.setblocking(0)
         self.socket=socket
-        self.karma=0.0 #rate at which socket has been sending data over the chat server
-        self.karma_lock=threading.Lock()
+        self.send_rate=0.0 #rate at which socket has been sending data over the chat server
+        self.send_rate_lock=threading.Lock()
         self.time_last_sent=time.time() #time at which the socket last sent a message
 
 
@@ -78,7 +78,7 @@ class client_socket():
         iq['to']=self.get_to_alias()
         iq['type']='set'
         iq.append(packet)
-
+        
         return self.master.send(iq, self.from_aliases) #return number of bytes sent
 
     def buffer_message(self, iq_id, data):
@@ -118,55 +118,34 @@ class client_socket():
 
         self.master.client_sockets_lock.release()
 
-    def handle_close(self, send_disconnect=False):
+    ### send_rate methods
 
-        '''Called when the TCP client socket closes.'''
-
-        (local_address, remote_address)=(self.key[0], self.key[2])
-        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.close()
-
-        self.master.delete_socket(self.key)
-
-        for bot_index in self.from_aliases:
-            with self.master.bots[bot_index].num_clients_lock:
-                self.master.bots[bot_index].num_clients-=1
-
-        if send_disconnect:
-            self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
-            with self.master.pending_disconnects_lock: #wait for an error from the chat server
-                to_aliases=set(self.to_aliases)
-                self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
-                self.master.pending_disconnect_timeout(self.key, to_aliases)
-
-    ### karma methods
-
-    def set_karma(self, num_bytes):
+    def set_send_rate(self, num_bytes):
         
-        '''set karma and time_last_sent'''
+        '''set send_rate and time_last_sent'''
         
         now=time.time()
         dtime=now-self.time_last_sent
-        if dtime>KARMA_RESET:
-            self.karma=num_bytes
+        if dtime>SEND_RATE_RESET:
+            self.send_rate=num_bytes
         else:
             '''
             compute moving average
-            note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
-            and as dtime-->0, the new self.karma-->num_bytes+self.karma
+            note that as dtime-->SEND_RATE_RESET, the new self.send_rate-->num_bytes
+            and as dtime-->0, the new self.send_rate-->num_bytes+self.send_rate
             '''
-            self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)
+            self.send_rate=num_bytes+self.send_rate*(1-dtime/SEND_RATE_RESET)
 
         self.time_last_sent=now
-        self.karma_lock.release()
+        self.send_rate_lock.release()
 
 
-    def get_karma(self):
+    def get_send_rate(self):
         
-        '''get current karma and time_last_sent'''
+        '''get current send_rate and time_last_sent'''
         
-        self.karma_lock.acquire()
-        return (self.karma, self.time_last_sent)
+        self.send_rate_lock.acquire()
+        return (self.send_rate, self.time_last_sent)
 
     ### socket methods
 
@@ -190,31 +169,32 @@ class client_socket():
     def recv(self):
 
         '''read data from socket'''
-
+        
         if not self.reading:
             return
-
-        (karma, time_last_sent)=self.get_karma()
+            
+        (send_rate, time_last_sent)=self.get_send_rate()
         dtime=time.time()-time_last_sent
-        if (MAX_SIZE+karma)/(dtime+KARMA_RESET)>ALLOCATED_BANDWIDTH:
+        if (RECV_RATE+send_rate)/(dtime+SEND_RATE_RESET)>ALLOCATED_BANDWIDTH:
             #enforce bandwidth limitation
-            self.karma_lock.release()
+            self.send_rate_lock.release()
             return
+            
         try:
-            data = self.socket.recv(MAX_SIZE)
+            data = self.socket.recv(RECV_RATE)
             if not data:
                 # a closed connection is indicated by signaling
                 # a read condition, and having recv() return 0.
                 self.handle_close(True)
-                self.karma_lock.release()
+                self.send_rate_lock.release()
             else:
-                num_bytes_sent=self.send_message(data)
-                self.set_karma(num_bytes_sent)
+                self.send_message(data)
+                self.set_send_rate(len(data))
         except socket.error as why:
             # winsock sometimes throws ENOTCONN
             if why.args[0] in asyncore._DISCONNECTED:
                 self.handle_close(True)
-                self.karma_lock.release()
+                self.send_rate_lock.release()
             else:
                 raise
 
@@ -224,6 +204,30 @@ class client_socket():
         except socket.error as why:
             if why.args[0] not in (asyncore.ENOTCONN, asyncore.EBADF):
                 raise
+
+    ### wrappers for some socket methods
+
+    def handle_close(self, send_disconnect=False):
+
+        '''Called when the TCP client socket closes.'''
+        
+        (local_address, remote_address)=(self.key[0], self.key[2])
+        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+        self.close()
+
+        self.master.delete_socket(self.key)
+
+        for bot_index in self.from_aliases:
+            with self.master.bots[bot_index].num_clients_lock:
+                self.master.bots[bot_index].num_clients-=1
+
+        if send_disconnect:
+            self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
+            with self.master.pending_disconnects_lock: #wait for an error from the chat server
+                to_aliases=set(self.to_aliases)
+                self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
+                self.master.pending_disconnect_timeout(self.key, to_aliases)
+
 
     def handle_expt_event(self):
         # handle_expt_event() is called if there might be an error on the

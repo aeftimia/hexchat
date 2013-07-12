@@ -7,7 +7,6 @@ import logging
 
 from master import master
 from stanza_plugins import register_stanza_plugins
-from util import KARMA_RESET, SELECT_LOOP_RATE
 import sys
 
 from sleekxmpp.util import QueueEmpty
@@ -18,7 +17,7 @@ if sys.version_info < (3, 0):
 else:
     raw_input = input
 
-START_SEND_RATE=10**3//8
+START_SEND_RATE=5*10**3//8
 END_SEND_RATE=100*10**3//8
 SEND_RATE_INCREMENT=10**3//8
 
@@ -42,7 +41,7 @@ def send(sock, master_):
         #sleeping for 1 second in between sending them
         #this garantees the data is not all sent instantly
         first_chunk_size=len(data)//2
-        first_chunk_size=first_chunk_size-first_chunk_size%8 #make sure it is not sending partial datums
+        first_chunk_size=first_chunk_size-first_chunk_size%8 #send everything in 8 byte chunks
         first_chunk=data[:first_chunk_size]
         while first_chunk:
             bytes=sock.send(first_chunk)

@@ -6,15 +6,11 @@ import sleekxmpp.xmlstream.handler.callback as callback
 import sleekxmpp.xmlstream.matcher.stanzapath as stanzapath
 from stanza_plugins import *
 
-from sleekxmpp.util import QueueEmpty
+from sleekxmpp.util import QueueEmpty, Queue
 import socket as Socket
 import ssl
 
-'''
-Karma is defined as the average number of bytes sent over a window of KARMA_RESET
-'''
-
-from util import KARMA_RESET, THROUGHPUT
+from util import THROUGHPUT
 
 class bot(sleekxmpp.ClientXMPP):
     '''
@@ -22,9 +18,9 @@ class bot(sleekxmpp.ClientXMPP):
     '''
     def __init__(self, master, jid_password):
         self.master=master
-        self.karma=0.0
-        self.time_last_sent=time.time() #times at which the bot last sent a message
-        self.karma_lock=threading.Lock()
+        self.buffer_size=0 #number of bytes of data waiting to be sent
+        self.buffer_queue=Queue()
+        self.buffer_size_lock=threading.Lock()
         self.num_clients=0 #number of clients sockets using this bot
         self.num_clients_lock=threading.Lock()
         self.__failed_send_stanza=None #some sleekxmpp thing for resending stuff
@@ -42,30 +38,19 @@ class bot(sleekxmpp.ClientXMPP):
 
         self.register_plugin('xep_0199') # Ping
 
-    def set_karma(self, num_bytes):
+    def buffer_message(self, data):
         '''
         set the karma and time_last_sent
         karma_lock should have been acquired before calling this function
         '''
-        now=time.time()
-        dtime=now-self.time_last_sent
-        if dtime>KARMA_RESET:
-            self.karma=num_bytes
-        else:
-            '''
-            compute moving average
-            note that as dtime-->KARMA_RESET, the new self.karma-->num_bytes
-            and as dtime-->0, the new self.karma-->num_bytes+self.karma
-            '''
-            self.karma=num_bytes+self.karma*(1-dtime/KARMA_RESET)
-
-        self.time_last_sent=now
-        self.karma_lock.release()
+        self.buffer_queue.put(data)
+        self.buffer_size+=len(data)
+        self.buffer_size_lock.release()
 
 
-    def get_karma(self):
-        self.karma_lock.acquire()
-        return (self.karma, self.time_last_sent)
+    def get_buffer_size(self):
+        self.buffer_size_lock.acquire()
+        return self.buffer_size
 
     def get_num_clients(self):
         self.num_clients_lock.acquire()
@@ -132,8 +117,14 @@ class bot(sleekxmpp.ClientXMPP):
                 else:
                     try:
                         data = self.send_queue.get(True, 1)
+                        was_buffered=False
                     except QueueEmpty:
-                        continue
+                        try:
+                            data = self.buffer_queue.get(True, 1)
+                            was_buffered=True
+                        except QueueEmpty:
+                            continue
+                            
                 logging.debug("SEND: %s", data)
                 enc_data = data.encode('utf-8')
                 total = len(enc_data)
@@ -145,15 +136,19 @@ class bot(sleekxmpp.ClientXMPP):
                         while sent < total and not self.stop.is_set() and \
                               self.session_started_event.is_set():
                             try:
-                                bytes = self.socket.send(enc_data[sent:])
-                                sent += bytes
+                                num_bytes = self.socket.send(enc_data[sent:])
+                                sent += num_bytes
                                 count += 1
                                 '''
                                 throttling code
                                 that prevents data from being sent
                                 faster than THROUGHPUT
                                 '''
-                                time.sleep(bytes/THROUGHPUT)
+                                time.sleep(num_bytes/THROUGHPUT)
+                                if was_buffered:
+                                    with self.buffer_size_lock:
+                                        self.buffer_size-=num_bytes
+                                        
                             except ssl.SSLError as serr:
                                 if tries >= self.ssl_retry_max:
                                     logging.debug('SSL error: max retries reached')
@@ -168,7 +163,12 @@ class bot(sleekxmpp.ClientXMPP):
                                 tries += 1
                     if count > 1:
                         logging.debug('SENT: %d chunks', count)
-                    self.send_queue.task_done()
+                        
+                    if was_buffered:
+                        self.buffer_queue.task_done()
+                    else:
+                        self.send_queue.task_done()
+                        
                 except (Socket.error, ssl.SSLError) as serr:
                     self.event('socket_error', serr, direct=True)
                     logging.warning("Failed to send %s", data)

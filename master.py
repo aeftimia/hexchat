@@ -9,7 +9,7 @@ from client_socket import client_socket
 from server_socket import server_socket
 from bot import bot
 from util import Peer_Resource_DB
-from util import msg_to_key, alias_decode, karma_better, send_thread, Iq, tostring, ElementTree, format_header
+from util import msg_to_key, alias_decode, send_thread, Iq, tostring, ElementTree, format_header
 from util import CONNECT_TIMEOUT, PENDING_DISCONNECT_TIMEOUT, CHECK_RATE
 from util import ALLOCATED_BANDWIDTH, THROUGHPUT
 from util import SELECT_TIMEOUT, SELECT_LOOP_RATE
@@ -104,7 +104,7 @@ class master():
                     continue
                 sockets=list(self.socket_map)
                 (readable, writable, error)=select.select(sockets, sockets, sockets, SELECT_TIMEOUT)
-
+                
                 #error
                 for socket in error:
                     key=self.socket_map[socket]
@@ -127,40 +127,39 @@ class master():
                     client_socket=self.client_sockets[key]
                     client_socket.recv()
 
-    def get_best_karma(self, indices):
+    def get_bot(self, indices):
 
-        '''
-        Get the bot with the best karma
-        i.e. the one that has been sending the least data
-        '''
-
+        '''Get the bot with the smallest buffer size'''
+        
         selected_index=None
-        while selected_index==None:
+        while selected_index is None:
             for index in indices:
                 bot=self.bots[index]
                 if bot.session_started_event.is_set():
                     selected_index=index
-                    selected_karma=bot.get_karma()
+                    selected_buffer_size=bot.get_buffer_size()
+                    other_indices=indices[:]
+                    other_indices.remove(index)
                     break
-
-        for index in indices:
-            if index is selected_index or not self.bots[index].session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
+                    
+        for index in other_indices:
+            if not self.bots[index].session_started_event.is_set(): #bot might have been disconnected and is waiting to reconnect
                 continue
 
-            karma_vars=self.bots[index].get_karma()
-            if karma_better(karma_vars, selected_karma):
-                self.bots[selected_index].karma_lock.release()
+            buffer_size=self.bots[index].get_buffer_size()
+            if buffer_size<selected_buffer_size:
+                self.bots[selected_index].buffer_size_lock.release()
                 selected_index=index
-                selected_karma=karma_vars
+                selected_buffer_size=buffer_size
             else:
-                self.bots[index].karma_lock.release()
-
-        return selected_index #with karma_lock still acquired
+                self.bots[index].buffer_size_lock.release()
+        
+        return selected_index #with buffer_size_lock still acquired
 
     def get_aliases(self):
 
         '''Get bots that are being used least'''
-
+        
         client_index_list=[]
 
         while not client_index_list: #wait until at least one bot has started up
@@ -187,7 +186,7 @@ class master():
 
         while client_index_list:
             self.bots[client_index_list.pop()[0]].num_clients_lock.release()
-
+        
         return index_list
 
     def add_aliases(self, xml, aliases):
@@ -476,16 +475,22 @@ class master():
         self.send(iq, from_aliases, now=True)
 
     def send(self, data, aliases, now=False):
-        selected_index=self.get_best_karma(aliases)
+        
+        '''
+        Either send the data over the chat server immediately,
+        or place it in the buffer
+        '''
+        
+        selected_index=self.get_bot(aliases) #get the bot with the smallest buffer_size
         selected_bot=self.bots[selected_index]
         data['from']=selected_bot.boundjid.full
         str_data = tostring(data.xml, top_level=True)
-        num_bytes=len(str_data)
-        selected_bot.set_karma(num_bytes)
         if now:
+            selected_bot.buffer_size+=len(str_data)
+            selected_bot.buffer_size_lock.release()
             threading.Thread(name="send from %s to %s" % (data['from'], data['to']), target=lambda: send_thread(str_data, selected_bot)).start()
         else:
-            selected_bot.send_queue.put(str_data)
+            selected_bot.buffer_message(str_data)
 
         return len(str_data)
 
