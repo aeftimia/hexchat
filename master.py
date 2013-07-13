@@ -295,7 +295,7 @@ class master():
         with self.client_sockets_lock:
             for key in self.client_sockets:
                 if iq['from'].full in key:
-                    from_aliases=self.client_socekets.get_from_aliases()
+                    from_aliases=self.client_sockets[key].from_aliases
                     self.close_socket(key)
                     to_aliases=set(key[1]).remove([iq['from'].full])
                     if to_aliases:
