@@ -116,12 +116,12 @@ class bot(sleekxmpp.ClientXMPP):
                     self.__failed_send_stanza = None
                 else:
                     try:
-                        data = self.send_queue.get(True, 1)
-                        was_buffered=False
+                        data = self.buffer_queue.get(True, 1)
+                        was_buffered=True
                     except QueueEmpty:
                         try:
-                            data = self.buffer_queue.get(True, 1)
-                            was_buffered=True
+                            data = self.send_queue.get(True, 0.0)
+                            was_buffered=False
                         except QueueEmpty:
                             continue
                             
