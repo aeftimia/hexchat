@@ -296,7 +296,7 @@ class master():
             for key in self.client_sockets:
                 if iq['from'].full in key:
                     from_aliases=self.client_sockets[key].from_aliases
-                    self.close_socket(key)
+                    self.delete_socket(key)
                     to_aliases=set(key[1]).remove([iq['from'].full])
                     if to_aliases:
                         with self.pending_disconnects_lock:
@@ -550,7 +550,7 @@ class master():
 
     def delete_socket(self, key):
         del self.socket_map[self.client_sockets[key].socket]
-        del self.client_sockets[key]
+        self.client_sockets.pop(key).close()
         logging.debug("%s:%d" % key[0] + " disconnected from %s:%d." % key[2])
 
     #handling pending disconnects

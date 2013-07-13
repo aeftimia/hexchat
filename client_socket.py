@@ -213,10 +213,9 @@ class client_socket():
         
         (local_address, remote_address)=(self.key[0], self.key[2])
         logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
-        self.close()
-
+        
         self.master.delete_socket(self.key)
-
+        
         for bot_index in self.from_aliases:
             with self.master.bots[bot_index].num_clients_lock:
                 self.master.bots[bot_index].num_clients-=1
