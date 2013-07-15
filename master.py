@@ -452,7 +452,7 @@ class master():
         iq['type']='result'
         iq.append(packet)
 
-        self.send(iq, indices, now=True)
+        self.send(iq, indices, now=True, wait=True)
 
         if response=="success":
             return aliases
@@ -474,7 +474,7 @@ class master():
 
         self.send(iq, from_aliases, now=True)
 
-    def send(self, data, aliases, now=False):
+    def send(self, data, aliases, now=False, wait=False):
         
         '''
         Either send the data over the chat server immediately,
@@ -488,7 +488,10 @@ class master():
         if now:
             selected_bot.buffer_size+=len(str_data)
             selected_bot.buffer_size_lock.release()
-            threading.Thread(name="send from %s to %s" % (data['from'], data['to']), target=lambda: send_thread(str_data, selected_bot)).start()
+            if wait:
+                send_thread(str_data, selected_bot)
+            else:
+                threading.Thread(name="send from %s to %s" % (data['from'], data['to']), target=lambda: send_thread(str_data, selected_bot)).start()
         else:
             selected_bot.buffer_message(str_data)
 
