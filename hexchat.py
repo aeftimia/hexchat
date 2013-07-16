@@ -29,6 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--client', dest='client', type=str, nargs='+', default=False, help='Ports to listen on and JIDs and ports to forward to. <local ip1> <local port1> <server jid1> <remote ip1> <remote port1> ...')
     parser.add_argument('--num_logins', const='num_logins', type=int, nargs='?', default=1, help='number of times to login to each account')
     parser.add_argument('--sequential_bootup', const='sequential_bootup', nargs='?', default=False, help='Some computers need to login to each account sequentially. If hexchat never boots up, try setting this option.')
+    parser.add_argument('--take_measurements', const='take_measurements', nargs='?', default=False, help='Measure rates at which sockets are sending data.')
     args=parser.parse_args()
 
     if args.debug:
@@ -51,7 +52,7 @@ if __name__ == '__main__':
             whitelist.append((args.whitelist[index], int(args.whitelist[index+1])))
             index+=2
         
-    master0=master(username_passwords, whitelist, args.num_logins, args.sequential_bootup)
+    master0=master(username_passwords, whitelist, args.num_logins, args.sequential_bootup, args.take_measurements)
     if args.client:
         index=0
         while index<len(args.client):

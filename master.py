@@ -12,12 +12,12 @@ from util import Peer_Resource_DB
 from util import msg_to_key, alias_decode, send_thread, Iq, tostring, ElementTree, format_header
 from util import CONNECT_TIMEOUT, PENDING_DISCONNECT_TIMEOUT, CHECK_RATE
 from util import ALLOCATED_BANDWIDTH, THROUGHPUT
-from util import SELECT_TIMEOUT, SELECT_LOOP_RATE
+from util import SELECT_TIMEOUT, SELECT_LOOP_RATE, SEND_RATE_RESET
 
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
-    def __init__(self, jid_passwords, whitelist, num_logins, sequential_bootup):
+    def __init__(self, jid_passwords, whitelist=None, num_logins=1, sequential_bootup=False, take_measurements=False):
         """
         Initialize a hexchat XMPP bot. Also connect to the XMPP server.
 
@@ -92,6 +92,32 @@ class master():
 
         #start processing sockets with select
         threading.Thread(name="loop %d" % hash(frozenset(map(lambda bot: bot.boundjid.full, self.bots))), target=lambda: self.select_loop()).start()
+        if take_measurements:
+            threading.Thread(name="debug", target=lambda: self.poll()).start()
+        
+    def poll(self):
+        while True:
+            time.sleep(1)
+            send_rate_vars_list=[]
+            with self.client_sockets_lock:
+                if not self.client_sockets:
+                    continue
+                for (_,client_socket) in self.client_sockets.items():
+                    send_rate_vars_list.append(client_socket.get_send_rate())
+                    client_socket.send_rate_lock.release()
+                    
+            now=time.time()
+            total=0
+            length=0
+            peak_send_rate=0
+            for send_rate_vars in send_rate_vars_list:
+                send_rate=send_rate_vars[0]/SEND_RATE_RESET
+                if send_rate>peak_send_rate:
+                    peak_send_rate=send_rate
+                total+=send_rate
+                length+=1
+            avg_send_rate=total/length
+            logging.warn("avg send rate is %fkb/s. peak is %fkb/s. total is %fkb/s." % ((avg_send_rate/1000), (peak_send_rate/1000), (total/1000)))
 
     def select_loop(self):
 

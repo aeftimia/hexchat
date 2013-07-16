@@ -14,7 +14,7 @@ never changed. It might be broken into smaller chunks or combined into bigger
 chunks, and it might be delivered at unpredictable rates, but it is never
 altered.
 
-------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 Summary of implementation: When the program is started, it is told what JID(s)
 to use to connect to a chat server, and possibly the following optional
@@ -53,7 +53,7 @@ disconnect message is added to the buffer at the appropriate index as a string
 "disconnect" as though it were normal data. When a "disconnect" string is found
 in the buffer, the socket is closed and deleted from the bot's routing table.
 
-------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 Running the program: The server is launched with: python hexchat.py --logfile
 <log file> --login <serveruser1@chatserver> 'password1' <serveruser2@chatserver>
@@ -86,7 +86,18 @@ The default is to login once to each account.
 Use the --sequential_bootup flag to force hexchat to login to each chat account
 sequentially. Some computers need this.
 
-------------------------------------------------------------------------------------------
+Use the --take_measurements flag to have hexchat record the rate at which
+sockets send data. The logfile will contains warning messages of the form:
+
+avg send rate <kb/s>. peak <kb/s>. total <kb/s>
+
+, where "avg send rate" is the average send rate of all currently open
+connections, "peak" highest send rate of all currently open connections, and
+"total" is the the combined send rate of all currently open connections. In this
+context, "send rate" refers to the rate at which s socket is receiving data to
+be sent over a chat server.
+
+--------------------------------------------------------------------------------
 
 Example: client: python hexchat.py --logfile /tmp/hexchat --login
 alice@gmail.com 'alices password' bob@gmail.com 'bobs password'
