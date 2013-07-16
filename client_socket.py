@@ -7,8 +7,7 @@ import time
 import sys
 
 from util import format_header, ElementTree, Iq
-from util import MAX_ID, MAX_DB_SIZE, RECV_RATE
-from util import SEND_RATE_RESET, ALLOCATED_BANDWIDTH, THROUGHPUT
+from util import MAX_ID, MAX_DB_SIZE, MIN_RECV_RATE, MAX_RECV_RATE, ALLOCATED_BANDWIDTH, SEND_RATE_RESET
 
 class client_socket():
     '''
@@ -39,6 +38,7 @@ class client_socket():
         self.send_rate=0.0 #rate at which socket has been sending data over the chat server
         self.send_rate_lock=threading.Lock()
         self.time_last_sent=time.time() #time at which the socket last sent a message
+        self.avg_send_rate=0.0
 
 
     def get_to_alias(self):
@@ -123,22 +123,16 @@ class client_socket():
     def set_send_rate(self, num_bytes):
         
         '''set send_rate and time_last_sent'''
-        
         now=time.time()
-        dtime=now-self.time_last_sent
-        if dtime>SEND_RATE_RESET:
-            self.send_rate=num_bytes
-        else:
-            '''
-            compute moving average
-            note that as dtime-->SEND_RATE_RESET, the new self.send_rate-->num_bytes
-            and as dtime-->0, the new self.send_rate-->num_bytes+self.send_rate
-            '''
-            self.send_rate=num_bytes+self.send_rate*(1-dtime/SEND_RATE_RESET)
-
-        self.time_last_sent=now
+        if self.master.should_take_measurements:
+            dtime=(now-self.time_last_sent)
+            if dtime>SEND_RATE_RESET:
+                self.avg_send_rate=num_bytes
+            else:
+                self.avg_send_rate=num_bytes+self.avg_send_rate*(1-dtime/SEND_RATE_RESET)
+        self.time_last_sent=time.time()
+        self.send_rate=num_bytes
         self.send_rate_lock.release()
-
 
     def get_send_rate(self):
         
@@ -146,6 +140,10 @@ class client_socket():
         
         self.send_rate_lock.acquire()
         return (self.send_rate, self.time_last_sent)
+
+    def get_avg_send_rate(self):
+        with self.send_rate_lock:
+            return self.avg_send_rate/(time.time()-self.time_last_sent+SEND_RATE_RESET)
 
     ### socket methods
 
@@ -175,13 +173,15 @@ class client_socket():
             
         (send_rate, time_last_sent)=self.get_send_rate()
         dtime=time.time()-time_last_sent
-        if (RECV_RATE+send_rate)/(dtime+SEND_RATE_RESET)>ALLOCATED_BANDWIDTH:
+        recv_rate=int(ALLOCATED_BANDWIDTH*dtime-send_rate)
+        if recv_rate<MIN_RECV_RATE:
             #enforce bandwidth limitation
             self.send_rate_lock.release()
             return
-            
+        if recv_rate>MAX_RECV_RATE:
+            recv_rate=int(MAX_RECV_RATE)
         try:
-            data = self.socket.recv(RECV_RATE)
+            data = self.socket.recv(recv_rate)
             if not data:
                 # a closed connection is indicated by signaling
                 # a read condition, and having recv() return 0.

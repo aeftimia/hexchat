@@ -11,9 +11,7 @@ from bot import bot
 from util import Peer_Resource_DB
 from util import msg_to_key, alias_decode, send_thread, Iq, tostring, ElementTree, format_header
 from util import CONNECT_TIMEOUT, PENDING_DISCONNECT_TIMEOUT, CHECK_RATE
-from util import ALLOCATED_BANDWIDTH, THROUGHPUT
-from util import SELECT_TIMEOUT, SELECT_LOOP_RATE, SEND_RATE_RESET
-
+from util import ALLOCATED_BANDWIDTH, THROUGHPUT, SELECT_LOOP_RATE
 
 """this class exchanges data between tcp sockets and xmpp servers."""
 class master():
@@ -91,45 +89,43 @@ class master():
             self.bots[index].register_hexchat_handlers()
 
         #start processing sockets with select
+        self.should_take_measurements=take_measurements
         threading.Thread(name="loop %d" % hash(frozenset(map(lambda bot: bot.boundjid.full, self.bots))), target=lambda: self.select_loop()).start()
-        if take_measurements:
-            threading.Thread(name="debug", target=lambda: self.poll()).start()
         
-    def poll(self):
-        while True:
-            time.sleep(1)
-            send_rate_vars_list=[]
-            with self.client_sockets_lock:
-                if not self.client_sockets:
-                    continue
-                for (_,client_socket) in self.client_sockets.items():
-                    send_rate_vars_list.append(client_socket.get_send_rate())
-                    client_socket.send_rate_lock.release()
-                    
-            now=time.time()
-            total=0
-            length=0
-            peak_send_rate=0
-            for send_rate_vars in send_rate_vars_list:
-                send_rate=send_rate_vars[0]/SEND_RATE_RESET
-                if send_rate>peak_send_rate:
-                    peak_send_rate=send_rate
-                total+=send_rate
-                length+=1
-            avg_send_rate=total/length
-            logging.warn("avg send rate is %fkb/s. peak is %fkb/s. total is %fkb/s." % ((avg_send_rate/1000), (peak_send_rate/1000), (total/1000)))
+    def take_measurements(self):
+        send_rate_list=[]
+        with self.client_sockets_lock:
+            if not self.client_sockets:
+                return
+            for (_,client_socket) in self.client_sockets.items():
+                send_rate_list.append(client_socket.get_avg_send_rate())
+        total=0
+        length=0
+        peak_send_rate=0
+        now=time.time()
+        for send_rate in send_rate_list:
+            if send_rate>peak_send_rate:
+                peak_send_rate=send_rate
+            total+=send_rate
+            length+=1
+        avg_send_rate=total/length
+        logging.warn("avg send rate is %fkb/s. peak is %fkb/s. total is %fkb/s." % ((avg_send_rate/1000), (peak_send_rate/1000), (total/1000)))
 
     def select_loop(self):
 
         '''process sockets with select call'''
-
+        last_measurement_time=time.time()
+        sleep_time=1
         while True:
+            if self.should_take_measurements and time.time()-last_measurement_time>1:
+                self.take_measurements()
+                last_measurement_time=time.time()
             time.sleep(SELECT_LOOP_RATE)
             with self.client_sockets_lock:
                 if not self.socket_map:
                     continue
                 sockets=list(self.socket_map)
-                (readable, writable, error)=select.select(sockets, sockets, sockets, SELECT_TIMEOUT)
+                (readable, writable, error)=select.select(sockets, sockets, sockets, 0.0)
                 
                 #error
                 for socket in error:

@@ -4,22 +4,22 @@ import xml.etree.cElementTree as ElementTree
 from sleekxmpp.xmlstream import tostring
 from sleekxmpp.stanza import Message, Iq
 
-SEND_RATE_RESET=1.0 #seconds
 THROUGHPUT=4.9*10**3 #bytes/second
-
-MAX_ID=2**32-1
-MAX_DB_SIZE=2**22 #bytes
-RECV_RATE=2**13 #bytes
 
 TIMEOUT=30.0 #seconds before closing a socket if it has not gotten a connect_ack
 CHECK_RATE=0.1 #seconds to check for a condition
 
 CONNECT_TIMEOUT=1.0 #time to wait to try to connect a socket to the requested ip:port
 PENDING_DISCONNECT_TIMEOUT=2.0 #time to wait for the chat server to send an error
-SELECT_TIMEOUT=0.0
-SELECT_LOOP_RATE=0.01 #rate to poll sockets
 
-ALLOCATED_BANDWIDTH=2**16 #bytes/second to allocate to each connection
+MAX_ID=2**32-1
+MAX_DB_SIZE=2**22 #bytes
+
+MIN_RECV_RATE=2**13 #bytes
+MAX_RECV_RATE=2**15 #bytes
+ALLOCATED_BANDWIDTH=2**15 #bytes/second to allocate to each connection
+SELECT_LOOP_RATE=MIN_RECV_RATE/ALLOCATED_BANDWIDTH #rate to poll sockets
+SEND_RATE_RESET=MAX_RECV_RATE/ALLOCATED_BANDWIDTH #time in seconds for exponential moving average of send rate
 
 #convert message to key
 def msg_to_key(msg, aliases):
