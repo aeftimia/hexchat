@@ -7,7 +7,8 @@ import time
 import sys
 
 from util import format_header, ElementTree, Iq
-from util import MAX_ID, MAX_DB_SIZE, MIN_RECV_RATE, MAX_RECV_RATE, ALLOCATED_BANDWIDTH, SEND_RATE_RESET
+from util import MAX_ID, MAX_DB_SIZE, MIN_RECV_RATE, MAX_RECV_RATE
+from util import ALLOCATED_BANDWIDTH, SEND_RATE_RESET
 
 class client_socket():
     '''
@@ -15,30 +16,30 @@ class client_socket():
     These are the sockets NOT being used to talk with the chat server.
     '''
     def __init__(self, master, key, from_aliases, socket):
-        self.master=master
-        self.key=key
-        self.write_buffer=b'' #used to buffer data to be written
-        self.to_aliases=list(self.key[1]) #aliases to send messages to
-        self.to_alias_index=0 #index used for round-robin scheduling
-        self.to_alias_lock=threading.Lock()
+        self.master = master
+        self.key = key
+        self.write_buffer = b'' # used to buffer data to be written
+        self.to_aliases = list(self.key[1]) # JIDs to send messages to
+        self.to_alias_index = 0 # index used for round-robin scheduling
+        self.to_alias_lock = threading.Lock()
         '''
         from_aliases is a
         set of indices that correspond
         to aliases to send messages from.
         The indices are used to access a bot from master's self.bots
         '''
-        self.from_aliases=from_aliases
-        self.id=0 #the id used to send the next message
-        self.last_id_received=0 #id of the last message that resulted in a write
-        self.incomming_message_db={} #used to lookup chunks of data from id numbers
-        self.reading=True #whether to read data from the socket
-        self.reading_lock=threading.Lock()
+        self.from_aliases = from_aliases # JIDs to send from
+        self.id = 0 # the id used to send the next message
+        self.last_id_received = 0 # id of the last message that resulted in a write
+        self.incomming_message_db = {} # used to lookup chunks of data from id numbers
+        self.reading = True # whether to read data from the socket
+        self.reading_lock = threading.Lock()
         socket.setblocking(0)
-        self.socket=socket
-        self.send_rate=0.0 #rate at which socket has been sending data over the chat server
-        self.send_rate_lock=threading.Lock()
-        self.time_last_sent=time.time() #time at which the socket last sent a message
-        self.avg_send_rate=0.0
+        self.socket = socket
+        self.send_rate = 0.0 # rate at which socket has been sending data over the chat server
+        self.send_rate_lock = threading.Lock()
+        self.time_last_sent = time.time() # time at which the socket last sent a message
+        self.avg_send_rate = 0.0    # used for master.take_measurements
 
 
     def get_to_alias(self):
@@ -46,75 +47,87 @@ class client_socket():
         '''get a JID to send the message to'''
 
         with self.to_alias_lock:
-            to_alias=self.to_aliases[self.to_alias_index]
-            self.to_alias_index=(self.to_alias_index+1)%len(self.to_aliases)
+            to_alias = self.to_aliases[self.to_alias_index]
+            self.to_alias_index = (self.to_alias_index + 1) % len(self.to_aliases)
             return to_alias
 
     def get_id(self):
 
         '''get an id give the message'''
 
-        iq_id=self.id
-        self.id=(self.id+1)%MAX_ID
+        iq_id = self.id
+        self.id = (self.id + 1) % MAX_ID
         return iq_id
 
     def send_message(self, data):
 
         '''send data as a message over the chat server'''
 
-        (local_address, remote_address)=(self.key[0], self.key[2])
-        packet=format_header(local_address, remote_address, ElementTree.Element('packet'))
-        packet.attrib['xmlns']="hexchat:packet"
+        (local_address, remote_address) = (self.key[0], self.key[2])
+        packet = format_header(local_address, remote_address, ElementTree.Element('packet'))
+        packet.attrib['xmlns'] = "hexchat:packet"
 
-        id_stanza=ElementTree.Element('id')
-        id_stanza.text=str(self.get_id())
+        id_stanza = ElementTree.Element('id')
+        id_stanza.text = str(self.get_id())
         packet.append(id_stanza)
 
-        data_stanza=ElementTree.Element('data')
+        data_stanza = ElementTree.Element('data')
         data_stanza.text=base64.b64encode(data).decode("UTF-8")
         packet.append(data_stanza)
 
-        iq=Iq()
-        iq['to']=self.get_to_alias()
-        iq['type']='set'
+        iq = Iq()
+        iq['to'] = self.get_to_alias()
+        iq['type'] = 'set'
         iq.append(packet)
         
-        return self.master.send(iq, self.from_aliases) #return number of bytes sent
+        return self.master.send(iq, self.from_aliases) # return number of bytes sent
 
     def buffer_message(self, iq_id, data):
 
         '''process data and add it to a buffer'''
 
-        if data=="disconnect":
-            #stop further reading
-            #even if there is more data
-            #to be written
-            self.reading=False
+        if data == "disconnect":
+            # stop further reading
+            # even if there is more data
+            # to be written
+            self.reading = False
 
-        raw_id_diff=iq_id-self.last_id_received
-        id_diff=raw_id_diff%MAX_ID
+        raw_id_diff = iq_id - self.last_id_received
+        id_diff = raw_id_diff % MAX_ID
 
-        if raw_id_diff<0 and raw_id_diff>-MAX_ID/2. or iq_id in self.incomming_message_db or sys.getsizeof(self.incomming_message_db)>=MAX_DB_SIZE:
-                logging.warn("received redundant message or too many messages in buffer. Disconnecting")
-                self.handle_close(True)
-                return
+        if raw_id_diff < 0 and raw_id_diff > -MAX_ID/2. or \
+            iq_id in self.incomming_message_db or \
+            sys.getsizeof(self.incomming_message_db) >= MAX_DB_SIZE:
+            
+            logging.warn("received redundant message or too many messages in buffer. Disconnecting")
+            self.handle_close(True)
+            return
 
-        if data=="disconnect":
-            logging.debug("%s:%d " % self.key[0] + "received disconnect from %s:%d" % self.key[2]+ " with id:%d" % iq_id)
+        if data == "disconnect":
+            logging.debug(
+                "%s:%d " % self.key[0] + \
+                "received disconnect from %s:%d" % self.key[2] + \
+                " with id:%d" % iq_id
+                )
         else:
-            logging.debug("%s:%d " % self.key[0] + "received %d bytes from " % len(data)+ "%s:%d" % self.key[2]+ " with id:%d" % iq_id)
-            logging.debug("%s:%d looking for id:"%self.key[0]+str(self.last_id_received))
+            logging.debug(
+                "%s:%d " % self.key[0] + "received %d bytes from " % len(data) + \
+                "%s:%d" % self.key[2] + " with id:%d" % iq_id
+                )
+            logging.debug(
+                "%s:%d looking for id:" % self.key[0] + str(self.last_id_received)
+                )
 
-        self.incomming_message_db[iq_id]=data
+        self.incomming_message_db[iq_id] = data
         while self.last_id_received in self.incomming_message_db:
-            data=self.incomming_message_db.pop(self.last_id_received)
-            if data=="disconnect":
+            data = self.incomming_message_db.pop(self.last_id_received)
+            if data == "disconnect":
                 self.handle_close()
                 self.master.client_sockets_lock.release()
                 return
-            self.last_id_received=(self.last_id_received+1)%MAX_ID
-            logging.debug("%s:%d now looking for id:"%self.key[0]+str(self.last_id_received))
-            self.write_buffer+=data
+            self.last_id_received = (self.last_id_received + 1) % MAX_ID
+            logging.debug("%s:%d now looking for id:" % self.key[0] + str(self.last_id_received))
+            self.write_buffer += data
 
         self.master.client_sockets_lock.release()
 
@@ -123,15 +136,20 @@ class client_socket():
     def set_send_rate(self, num_bytes):
         
         '''set send_rate and time_last_sent'''
-        now=time.time()
+        now = time.time()
         if self.master.should_take_measurements:
-            dtime=(now-self.time_last_sent)
-            if dtime>SEND_RATE_RESET:
-                self.avg_send_rate=num_bytes
+            dtime = (now - self.time_last_sent)
+            if dtime > SEND_RATE_RESET:
+                self.avg_send_rate = num_bytes
             else:
-                self.avg_send_rate=num_bytes+self.avg_send_rate*(1-dtime/SEND_RATE_RESET)
-        self.time_last_sent=time.time()
-        self.send_rate=num_bytes
+                # compute exponential moving average
+                # note that as dtime ==> 0, 
+                # new self.avg_send_rate ==> num_bytes + old self._avg_send_rate
+                # and as dtime ==> SEND_RATE_RESET, 
+                # new self.avg_send_rate ==> num_bytes
+                self.avg_send_rate = num_bytes + self.avg_send_rate * (1 - dtime / SEND_RATE_RESET)
+        self.time_last_sent = time.time()
+        self.send_rate = num_bytes
         self.send_rate_lock.release()
 
     def get_send_rate(self):
@@ -143,7 +161,7 @@ class client_socket():
 
     def get_avg_send_rate(self):
         with self.send_rate_lock:
-            return self.avg_send_rate/(time.time()-self.time_last_sent+SEND_RATE_RESET)
+            return self.avg_send_rate / (time.time() - self.time_last_sent + SEND_RATE_RESET)
 
     ### socket methods
 
@@ -162,7 +180,7 @@ class client_socket():
                 return
             else:
                 raise
-        self.write_buffer=self.write_buffer[bytes:]
+        self.write_buffer = self.write_buffer[bytes:]
 
     def recv(self):
 
@@ -171,15 +189,15 @@ class client_socket():
         if not self.reading:
             return
             
-        (send_rate, time_last_sent)=self.get_send_rate()
-        dtime=time.time()-time_last_sent
-        recv_rate=int(ALLOCATED_BANDWIDTH*dtime-send_rate)
-        if recv_rate<MIN_RECV_RATE:
+        (send_rate, time_last_sent) = self.get_send_rate()
+        dtime=time.time() - time_last_sent
+        recv_rate = int(ALLOCATED_BANDWIDTH * dtime - send_rate)
+        if recv_rate < MIN_RECV_RATE:
             #enforce bandwidth limitation
             self.send_rate_lock.release()
             return
-        if recv_rate>MAX_RECV_RATE:
-            recv_rate=int(MAX_RECV_RATE)
+        if recv_rate > MAX_RECV_RATE:
+            recv_rate = int(MAX_RECV_RATE)
         try:
             data = self.socket.recv(recv_rate)
             if not data:
@@ -211,20 +229,20 @@ class client_socket():
 
         '''Called when the TCP client socket closes.'''
         
-        (local_address, remote_address)=(self.key[0], self.key[2])
-        logging.debug("disconnecting %s:%d from " % local_address +  "%s:%d" % remote_address)
+        (local_address, remote_address) = (self.key[0], self.key[2])
+        logging.debug("disconnecting %s:%d from " % local_address + "%s:%d" % remote_address)
         
         self.master.delete_socket(self.key)
         
         for bot_index in self.from_aliases:
             with self.master.bots[bot_index].num_clients_lock:
-                self.master.bots[bot_index].num_clients-=1
+                self.master.bots[bot_index].num_clients -= 1
 
         if send_disconnect:
             self.master.send_disconnect(self.key, self.from_aliases, self.get_to_alias(), self.get_id())
             with self.master.pending_disconnects_lock: #wait for an error from the chat server
-                to_aliases=set(self.to_aliases)
-                self.master.pending_disconnects[self.key]=(self.from_aliases, to_aliases)
+                to_aliases = set(self.to_aliases)
+                self.master.pending_disconnects[self.key] = (self.from_aliases, to_aliases)
                 self.master.pending_disconnect_timeout(self.key, to_aliases)
 
 

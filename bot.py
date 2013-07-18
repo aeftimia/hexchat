@@ -17,17 +17,17 @@ class bot(sleekxmpp.ClientXMPP):
     Bot used to send and receive messages
     '''
     def __init__(self, master, jid_password):
-        self.master=master
-        self.buffer_size=0 #number of bytes of data waiting to be sent
-        self.buffer_queue=Queue()
-        self.buffer_size_lock=threading.Lock()
-        self.num_clients=0 #number of clients sockets using this bot
-        self.num_clients_lock=threading.Lock()
-        self.__failed_send_stanza=None #some sleekxmpp thing for resending stuff
+        self.master = master
+        self.buffer_size = 0 #number of bytes of data waiting to be sent
+        self.buffer_queue = Queue()
+        self.buffer_size_lock = threading.Lock()
+        self.num_clients = 0 #number of clients sockets using this bot
+        self.num_clients_lock = threading.Lock()
+        self.__failed_send_stanza = None #some sleekxmpp thing for resending stuff
         sleekxmpp.ClientXMPP.__init__(self, *jid_password)
 
         # gmail xmpp server is actually at talk.google.com
-        if jid_password[0].find("@gmail.com")!=-1:
+        if jid_password[0].find("@gmail.com") != -1:
             self.connect_address = ("talk.google.com", 5222)
         else:
             self.connect_address = None
@@ -44,7 +44,7 @@ class bot(sleekxmpp.ClientXMPP):
         karma_lock should have been acquired before calling this function
         '''
         self.buffer_queue.put(data)
-        self.buffer_size+=len(data)
+        self.buffer_size += len(data)
         self.buffer_size_lock.release()
 
 
@@ -60,16 +60,52 @@ class bot(sleekxmpp.ClientXMPP):
         
         '''these handle the custom iq stanzas'''
         
-        self.register_handler(callback.Callback('Connect Handler',stanzapath.StanzaPath('iq@type=set/connect'),self.master.connect_handler))
-        self.register_handler(callback.Callback('Connect Message Handler',stanzapath.StanzaPath('message@type=chat/connect'),self.master.connect_handler))
-        self.register_handler(callback.Callback('Connect Ack Handler',stanzapath.StanzaPath('iq@type=result/connect_ack'),self.master.connect_ack_handler))
-        self.register_handler(callback.Callback('Data Handler',stanzapath.StanzaPath('iq@type=set/packet'),self.master.data_handler))
-        self.register_handler(callback.Callback('Disconnect Handler',stanzapath.StanzaPath('iq@type=set/disconnect'),self.master.disconnect_handler))
-        self.register_handler(callback.Callback('Disconnect Error Message Handler',stanzapath.StanzaPath('message@type=chat/disconnect_error'),self.master.disconnect_error_handler))
-        self.register_handler(callback.Callback('Disconnect Error Iq Handler',stanzapath.StanzaPath('iq@type=set/disconnect_error'),self.master.disconnect_error_handler))
+        self.register_handler(
+            callback.Callback('Connect Handler',
+            stanzapath.StanzaPath('iq@type=set/connect'),
+            self.master.connect_handler)
+            )
+        self.register_handler(
+            callback.Callback('Connect Message Handler',
+            stanzapath.StanzaPath('message@type=chat/connect'),
+            self.master.connect_handler)
+            )
+        self.register_handler(
+            callback.Callback('Connect Ack Handler',
+            stanzapath.StanzaPath('iq@type=result/connect_ack'),
+            self.master.connect_ack_handler)
+            )
+        self.register_handler(
+            callback.Callback('Data Handler',
+            stanzapath.StanzaPath('iq@type=set/packet'),
+            self.master.data_handler)
+            )
+        self.register_handler(
+            callback.Callback('Disconnect Handler',
+            stanzapath.StanzaPath('iq@type=set/disconnect'),
+            self.master.disconnect_handler)
+            )
+        self.register_handler(
+            callback.Callback('Disconnect Error Message Handler',
+            stanzapath.StanzaPath('message@type=chat/disconnect_error'),
+            self.master.disconnect_error_handler)
+            )
+        self.register_handler(
+            callback.Callback('Disconnect Error Iq Handler',
+            stanzapath.StanzaPath('iq@type=set/disconnect_error'),
+            self.master.disconnect_error_handler)
+            )
 
-        self.register_handler(callback.Callback('IQ Error Handler',stanzapath.StanzaPath('iq@type=error/error'), self.master.error_handler))
-        self.register_handler(callback.Callback('Message Error Handler',stanzapath.StanzaPath('message@type=error/error'),self.master.error_handler))
+        self.register_handler(
+            callback.Callback('IQ Error Handler',
+                stanzapath.StanzaPath('iq@type=error/error'),
+                self.master.error_handler)
+            )
+        self.register_handler(
+            callback.Callback('Message Error Handler',
+            stanzapath.StanzaPath('message@type=error/error'),
+            self.master.error_handler)
+            )
 
     ### session management mathods:
 
@@ -78,7 +114,7 @@ class bot(sleekxmpp.ClientXMPP):
             if process:
                 self.process()
         else:
-            raise(Exception(self.boundjid.bare+" could not connect"))
+            raise(Exception(self.boundjid.bare + " could not connect"))
 
     def session_start(self):
         
@@ -117,11 +153,11 @@ class bot(sleekxmpp.ClientXMPP):
                 else:
                     try:
                         data = self.buffer_queue.get(True, 1)
-                        was_buffered=True
+                        was_buffered = True
                     except QueueEmpty:
                         try:
                             data = self.send_queue.get(True, 0.0)
-                            was_buffered=False
+                            was_buffered = False
                         except QueueEmpty:
                             continue
                             
@@ -144,10 +180,10 @@ class bot(sleekxmpp.ClientXMPP):
                                 that prevents data from being sent
                                 faster than THROUGHPUT
                                 '''
-                                time.sleep(num_bytes/THROUGHPUT)
+                                time.sleep(num_bytes / THROUGHPUT)
                                 if was_buffered:
                                     with self.buffer_size_lock:
-                                        self.buffer_size-=num_bytes
+                                        self.buffer_size -= num_bytes
                                         
                             except ssl.SSLError as serr:
                                 if tries >= self.ssl_retry_max:
