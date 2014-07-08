@@ -56,14 +56,13 @@ in the buffer, the socket is closed and deleted from the bot's routing table.
 --------------------------------------------------------------------------------
 
 Running the program: The server is launched with: python hexchat.py --logfile
-<log file> --login <serveruser1@chatserver> 'password1' <serveruser2@chatserver>
+logfile --login serveruser1@chatserver 'password1' serveruser2@chatserver
 'password2' ...
 
 and the client is launched with:
 
-python hexchat.py --logfile <log file> --login <clientuser1@chatserver
-'password1' <clientuser2@chatserver> 'password2' ... --client <local ip1> <local
-port1> <serveruser@chatserver1> <remote ip1> <remote port1> ...
+python hexchat.py --logfile log file --login clientuser1@chatserver
+'password1' clientuser2@chatserver 'password2' ... --client LocalIP1 LocalPort1 serveruser@chatserver1 RemoteIP1 RemotePort1 ...
 
 , where serveruser@chatserver is one of the logins used when launching the
 server (this one cannot be a gmail account).
@@ -89,7 +88,7 @@ sequentially. Some computers need this.
 Use the --take_measurements flag to have hexchat record the rate at which
 sockets send data. The logfile will contains warning messages of the form:
 
-avg send rate <kb/s>. peak <kb/s>. total <kb/s>
+avg send rate kb/s. peak kb/s. total kb/s
 
 , where "avg send rate" is the average send rate of all currently open
 connections, "peak" highest send rate of all currently open connections, and
@@ -102,12 +101,11 @@ be sent over a chat server.
 Example: client: python hexchat.py --logfile /tmp/hexchat --login
 alice@gmail.com 'alices password' bob@gmail.com 'bobs password'
 charlie@jabber.org 'charlies password' --client 127.0.0.1 5555 robert@jabber.org
-<some ip address> <some port number>
+RemoteIP RemotePort
 
 server: python hexchat.py --logfile /tmp/hexchat --login robert@jabber.org
 'roberts password' eve@gmail.com 'eves password' alicia@jabber.org 'alicias
 password'
 
 Now when when the client connects to 127.0.0.1:5555, the data will be forwarded
-to the server, which will in turn forward the connection and data to <some ip
-address>:<some port number>.
+to the server, which will in turn forward the connection and data to RemoteIP:RemotePort
